@@ -577,19 +577,6 @@ export default function App() {
           >
             🔐 Login
           </button>
-          <div
-            style={{
-              marginTop: 20,
-              padding: "14px",
-              background: "rgba(255,255,255,0.04)",
-              borderRadius: 10,
-              fontSize: 12,
-              color: "rgba(255,255,255,0.35)",
-            }}
-          >
-            <div>Admin: admin / admin123</div>
-            <div>Cashier: cashier / cash123</div>
-          </div>
         </div>
       </div>
     );
