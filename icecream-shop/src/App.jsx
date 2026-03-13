@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
 
-// ─── FLAVORS & PRICES ──────────────────────────────────────────
-const FLAVORS = [
+const FALLBACK_FLAVORS = [
   { name: "Tender Coconut", price: 30, emoji: "🥥", category: "Fruit" },
   { name: "Blue Berry", price: 30, emoji: "🫐", category: "Fruit" },
   { name: "Jack Fruit", price: 30, emoji: "🍈", category: "Fruit" },
@@ -25,6 +24,9 @@ const FLAVORS = [
   { name: "Lotus Biscoff", price: 40, emoji: "🍪", category: "Special" },
   { name: "Spanish Delight", price: 30, emoji: "✨", category: "Special" },
   { name: "Fig Honey", price: 25, emoji: "🍯", category: "Special" },
+  { name: "Gulab Jamun", price: 30, emoji: "🔴", category: "Special" },
+  { name: "Rose Milk", price: 20, emoji: "🌹", category: "Special" },
+  { name: "Red Velvet", price: 30, emoji: "🎂", category: "Special" },
   { name: "Chocolate", price: 20, emoji: "🍫", category: "Classic" },
   { name: "Coffee", price: 20, emoji: "☕", category: "Classic" },
   { name: "Malai", price: 30, emoji: "🥛", category: "Classic" },
@@ -32,19 +34,16 @@ const FLAVORS = [
   { name: "Butter Scotch", price: 25, emoji: "🟡", category: "Classic" },
   { name: "Paan", price: 20, emoji: "🌿", category: "Classic" },
   { name: "Bubble Gum", price: 20, emoji: "🫧", category: "Classic" },
-  { name: "Gulab Jamun", price: 30, emoji: "🔴", category: "Special" },
 ];
 
 const CATEGORIES = ["All", "Fruit", "Classic", "Premium", "Special"];
 const DEFAULT_STOCK = 50;
 
-// ─── ROLES ────────────────────────────────────────────────────
 const USERS = {
   admin: { password: "admin123", role: "admin", name: "Admin" },
   cashier: { password: "cash123", role: "cashier", name: "Cashier" },
 };
 
-// ─── SUPABASE FUNCTIONS ───────────────────────────────────────
 const loadSales = async () => {
   const { data } = await supabase
     .from("sales")
@@ -53,59 +52,97 @@ const loadSales = async () => {
   return data || [];
 };
 const saveSale = async (entry) => {
-  const { error } = await supabase.from("sales").insert([
-    {
-      date: entry.date,
-      month: entry.month,
-      time: entry.time,
-      items: entry.items,
-      total: entry.total,
-      pay_mode: entry.payMode,
-    },
-  ]);
+  const { error } = await supabase
+    .from("sales")
+    .insert([
+      {
+        date: entry.date,
+        month: entry.month,
+        time: entry.time,
+        items: entry.items,
+        total: entry.total,
+        pay_mode: entry.payMode,
+      },
+    ]);
   return error;
 };
 const deleteSaleById = async (id) => {
   await supabase.from("sales").delete().eq("id", id);
 };
 
-// ─── HELPERS ─────────────────────────────────────────────────
+const loadFlavors = async () => {
+  const { data, error } = await supabase
+    .from("flavors")
+    .select("*")
+    .eq("active", true)
+    .order("category")
+    .order("name");
+  if (error || !data || data.length === 0) return FALLBACK_FLAVORS;
+  return data;
+};
+const addFlavor = async (flavor) => {
+  const { error } = await supabase
+    .from("flavors")
+    .insert([
+      {
+        name: flavor.name,
+        price: Number(flavor.price),
+        emoji: flavor.emoji || "🍦",
+        category: flavor.category,
+        active: true,
+      },
+    ]);
+  return error;
+};
+const updateFlavor = async (id, updates) => {
+  const { error } = await supabase
+    .from("flavors")
+    .update({
+      name: updates.name,
+      price: Number(updates.price),
+      emoji: updates.emoji,
+      category: updates.category,
+    })
+    .eq("id", id);
+  return error;
+};
+const deactivateFlavor = async (id) => {
+  const { error } = await supabase
+    .from("flavors")
+    .update({ active: false })
+    .eq("id", id);
+  return error;
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const fmt = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 const isMobile = () => window.innerWidth < 768;
-
 const payColor = (mode) => {
   if (mode === "upi") return { bg: "rgba(34,211,238,0.2)", text: "#22d3ee" };
   if (mode === "card") return { bg: "rgba(139,92,246,0.2)", text: "#a78bfa" };
   return { bg: "rgba(251,146,60,0.2)", text: "#fb923c" };
 };
 
-// ─── STOCK: load/save via localStorage with date-based carry-forward ──
 const loadStock = () => {
   try {
     const raw = localStorage.getItem("lickees_stock_v2");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      // If saved on a previous date, carry forward as-is (it IS the carry forward)
-      return parsed;
-    }
+    if (raw) return JSON.parse(raw);
   } catch (e) {}
   const s = {};
-  FLAVORS.forEach((f) => {
+  FALLBACK_FLAVORS.forEach((f) => {
     s[f.name] = DEFAULT_STOCK;
   });
   return s;
 };
 
-// ─── CSV DOWNLOAD ──────────────────────────────────────────────
 const downloadCSV = (sales, label) => {
   const rows = [["Date", "Time", "Items", "Total", "Payment"]];
   sales.forEach((s) => {
     rows.push([
       s.date,
       s.time,
-      s.items.map((i) => `${i.qty}x${i.name}`).join("|"),
+      (s.items || []).map((i) => `${i.qty}x${i.name}`).join("|"),
       s.total,
       s.pay_mode,
     ]);
@@ -118,7 +155,6 @@ const downloadCSV = (sales, label) => {
   a.click();
 };
 
-// ─── WHATSAPP ─────────────────────────────────────────────────
 const sendWhatsApp = (ana, phone) => {
   const msg = `🍨 *Lickees Daily Summary - ${today()}*\n\n💰 Total: ${fmt(ana.totalRevenue)}\n🧾 Transactions: ${ana.txnCount}\n🍦 Scoops: ${ana.totalScoops}\n📱 UPI: ${fmt(ana.upiRev)}\n💵 Cash: ${fmt(ana.cashRev)}\n💳 Card: ${fmt(ana.cardRev)}\n🏆 Top: ${ana.topFlavors[0]?.[0] || "N/A"}\n\n_Sent from Lickees POS_`;
   window.open(
@@ -127,7 +163,6 @@ const sendWhatsApp = (ana, phone) => {
   );
 };
 
-// ─── GLOBAL STYLES ────────────────────────────────────────────
 const G = `
   @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',sans-serif}
@@ -158,21 +193,21 @@ const G = `
   .cal-day.has-sales{background:rgba(236,72,153,0.12);border:1px solid rgba(236,72,153,0.3)}
   .cal-day.selected{background:rgba(236,72,153,0.35)!important;border:1px solid #ec4899!important}
   .cal-day.today-cell{border:1px solid rgba(251,191,36,0.5)}
+  .fi{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 14px;color:white;font-size:14px;outline:none;width:100%;font-family:'DM Sans',sans-serif}
+  .fi:focus{border-color:#ec4899}
   input,select{font-family:'DM Sans',sans-serif}
   ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
 `;
 
-// ═══════════════════════════════════════════════════════════════
-// MAIN APP
-// ═══════════════════════════════════════════════════════════════
 export default function App() {
-  const [screen, setScreen] = useState("login"); // login | intro | pos | dashboard
+  const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
   const [loginUser, setLoginUser] = useState("admin");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
-
   const [sales, setSales] = useState([]);
+  const [flavors, setFlavors] = useState([]);
+  const [flavorsLoading, setFlavorsLoading] = useState(true);
   const [cart, setCart] = useState([]);
   const [payMode, setPayMode] = useState("cash");
   const [filterCat, setFilterCat] = useState("All");
@@ -188,11 +223,22 @@ export default function App() {
   );
   const [showPhoneInput, setShowPhoneInput] = useState(false);
   const [activeTab, setActiveTab] = useState("sales");
-  const [calDate, setCalDate] = useState(null); // selected calendar date
+  const [calDate, setCalDate] = useState(null);
   const [calMonth, setCalMonth] = useState(() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
   });
+  const [showFlavorModal, setShowFlavorModal] = useState(false);
+  const [editingFlavor, setEditingFlavor] = useState(null);
+  const [flavorForm, setFlavorForm] = useState({
+    name: "",
+    price: "",
+    emoji: "🍦",
+    category: "Classic",
+  });
+  const [flavorDeleteConfirm, setFlavorDeleteConfirm] = useState(null);
+  const [flavorSearchQ, setFlavorSearchQ] = useState("");
+  const [flavorFilterCat, setFlavorFilterCat] = useState("All");
 
   useEffect(() => {
     const saved = localStorage.getItem("lickees_user");
@@ -210,6 +256,10 @@ export default function App() {
         setSales(data);
         setLoading(false);
       });
+      loadFlavors().then((data) => {
+        setFlavors(data);
+        setFlavorsLoading(false);
+      });
     }
   }, [screen]);
 
@@ -221,8 +271,11 @@ export default function App() {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
+  const refreshFlavors = async () => {
+    const data = await loadFlavors();
+    setFlavors(data);
+  };
 
-  // ── LOGIN ──
   const handleLogin = () => {
     const u = USERS[loginUser];
     if (u && u.password === loginPass) {
@@ -236,16 +289,66 @@ export default function App() {
       setLoginError("Invalid credentials. Try again.");
     }
   };
-
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem("lickees_user");
     setScreen("login");
   };
-
   const isAdmin = currentUser?.role === "admin";
 
-  // ── CART ──
+  const openAddFlavor = () => {
+    setEditingFlavor(null);
+    setFlavorForm({ name: "", price: "", emoji: "🍦", category: "Classic" });
+    setShowFlavorModal(true);
+  };
+  const openEditFlavor = (f) => {
+    setEditingFlavor(f);
+    setFlavorForm({
+      name: f.name,
+      price: f.price,
+      emoji: f.emoji,
+      category: f.category,
+    });
+    setShowFlavorModal(true);
+  };
+
+  const handleSaveFlavor = async () => {
+    if (!flavorForm.name.trim())
+      return showToast("❌ Name is required!", "error");
+    if (
+      !flavorForm.price ||
+      isNaN(flavorForm.price) ||
+      Number(flavorForm.price) <= 0
+    )
+      return showToast("❌ Enter a valid price!", "error");
+    if (editingFlavor) {
+      const error = await updateFlavor(editingFlavor.id, flavorForm);
+      if (error) return showToast("❌ Failed to update!", "error");
+      showToast(`✅ ${flavorForm.name} updated!`);
+    } else {
+      if (
+        flavors.find(
+          (f) => f.name.toLowerCase() === flavorForm.name.toLowerCase(),
+        )
+      )
+        return showToast("❌ Flavour already exists!", "error");
+      const error = await addFlavor(flavorForm);
+      if (error) return showToast("❌ Failed to add flavour!", "error");
+      setStock((s) => ({ ...s, [flavorForm.name]: DEFAULT_STOCK }));
+      showToast(`✅ ${flavorForm.emoji} ${flavorForm.name} added!`);
+    }
+    setShowFlavorModal(false);
+    await refreshFlavors();
+  };
+
+  const handleDeleteFlavor = async (id, name) => {
+    const error = await deactivateFlavor(id);
+    if (error) return showToast("❌ Failed to remove!", "error");
+    showToast(`🗑️ ${name} removed from menu!`);
+    setFlavorDeleteConfirm(null);
+    await refreshFlavors();
+  };
+
   const addToCart = (flavor) => {
     if ((stock[flavor.name] || 0) <= 0)
       return showToast(`❌ ${flavor.name} is out of stock!`, "error");
@@ -309,7 +412,6 @@ export default function App() {
     showToast("🗑️ Sale deleted!");
   };
 
-  // ── ANALYTICS ──
   const analyticsFor = (filterFn) => {
     const filtered = sales.filter(filterFn);
     const totalRevenue = filtered.reduce((s, x) => s + (x.total || 0), 0);
@@ -382,30 +484,33 @@ export default function App() {
     return days;
   };
 
-  // ── CALENDAR HELPERS ──
   const getCalendarDays = (ym) => {
     const [y, m] = ym.split("-").map(Number);
     const firstDay = new Date(y, m - 1, 1).getDay();
     const daysInMonth = new Date(y, m, 0).getDate();
     const salesByDate = {};
     sales.forEach((s) => {
-      if (s.date && s.date.startsWith(ym)) {
+      if (s.date && s.date.startsWith(ym))
         salesByDate[s.date] = (salesByDate[s.date] || 0) + (s.total || 0);
-      }
     });
     return { firstDay, daysInMonth, salesByDate, year: y, month: m };
   };
 
-  const displayFlavors = FLAVORS.filter(
+  const displayFlavors = flavors.filter(
     (f) =>
       (filterCat === "All" || f.category === filterCat) &&
       f.name.toLowerCase().includes(searchQ.toLowerCase()),
   );
-  const lowStockItems = FLAVORS.filter((f) => (stock[f.name] || 0) < 10);
-  const outOfStockItems = FLAVORS.filter((f) => (stock[f.name] || 0) <= 0);
+  const lowStockItems = flavors.filter((f) => (stock[f.name] || 0) < 10);
+  const outOfStockItems = flavors.filter((f) => (stock[f.name] || 0) <= 0);
   const mobile = isMobile();
   const seven = last7Days();
   const maxRev = Math.max(...seven.map((d) => d.rev), 1);
+  const managerFlavors = flavors.filter(
+    (f) =>
+      (flavorFilterCat === "All" || f.category === flavorFilterCat) &&
+      f.name.toLowerCase().includes(flavorSearchQ.toLowerCase()),
+  );
 
   const Toast = () =>
     toast ? (
@@ -431,9 +536,6 @@ export default function App() {
       </div>
     ) : null;
 
-  // ════════════════════════════════════════════════════════════
-  // LOGIN SCREEN
-  // ════════════════════════════════════════════════════════════
   if (screen === "login")
     return (
       <div
@@ -581,9 +683,6 @@ export default function App() {
       </div>
     );
 
-  // ════════════════════════════════════════════════════════════
-  // INTRO SCREEN
-  // ════════════════════════════════════════════════════════════
   if (screen === "intro")
     return (
       <div
@@ -715,9 +814,6 @@ export default function App() {
       </div>
     );
 
-  // ════════════════════════════════════════════════════════════
-  // POS SCREEN
-  // ════════════════════════════════════════════════════════════
   if (screen === "pos")
     return (
       <div
@@ -730,7 +826,6 @@ export default function App() {
       >
         <style>{G}</style>
         <Toast />
-        {/* Header */}
         <div
           style={{
             background: "white",
@@ -790,8 +885,6 @@ export default function App() {
             )}
           </div>
         </div>
-
-        {/* Filter Bar */}
         <div
           style={{
             background: "white",
@@ -827,8 +920,6 @@ export default function App() {
             }}
           />
         </div>
-
-        {/* Body */}
         <div
           style={{
             flex: 1,
@@ -837,82 +928,86 @@ export default function App() {
             overflow: "hidden",
           }}
         >
-          {/* Flavor Grid */}
           <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill,minmax(110px,1fr))",
-                gap: 10,
-              }}
-            >
-              {displayFlavors.map((f) => {
-                const qty = stock[f.name] || 0;
-                const isOut = qty <= 0;
-                const isLow = qty > 0 && qty < 10;
-                return (
-                  <div
-                    key={f.name}
-                    className={`fc${isOut ? " out" : ""}${isLow ? " low" : ""}`}
-                    onClick={() => !isOut && addToCart(f)}
-                  >
-                    <div style={{ fontSize: 28, marginBottom: 6 }}>
-                      {f.emoji}
-                    </div>
+            {flavorsLoading ? (
+              <div style={{ textAlign: "center", padding: 60, color: "#ccc" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>
+                <div>Loading flavours...</div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill,minmax(110px,1fr))",
+                  gap: 10,
+                }}
+              >
+                {displayFlavors.map((f) => {
+                  const qty = stock[f.name] || 0;
+                  const isOut = qty <= 0;
+                  const isLow = qty > 0 && qty < 10;
+                  return (
                     <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: "600",
-                        color: "#1f2937",
-                        lineHeight: 1.3,
-                        marginBottom: 4,
-                      }}
+                      key={f.id || f.name}
+                      className={`fc${isOut ? " out" : ""}${isLow ? " low" : ""}`}
+                      onClick={() => !isOut && addToCart(f)}
                     >
-                      {f.name}
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                      }}
-                    >
-                      <span
+                      <div style={{ fontSize: 28, marginBottom: 6 }}>
+                        {f.emoji}
+                      </div>
+                      <div
                         style={{
-                          color: "#ec4899",
-                          fontWeight: "700",
-                          fontSize: 14,
+                          fontSize: 12,
+                          fontWeight: "600",
+                          color: "#1f2937",
+                          lineHeight: 1.3,
+                          marginBottom: 4,
                         }}
                       >
-                        {fmt(f.price)}
-                      </span>
-                      <span
+                        {f.name}
+                      </div>
+                      <div
                         style={{
-                          fontSize: 10,
-                          padding: "2px 6px",
-                          borderRadius: 8,
-                          background: isOut
-                            ? "#fee2e2"
-                            : isLow
-                              ? "#fff7ed"
-                              : "#fdf2f8",
-                          color: isOut
-                            ? "#ef4444"
-                            : isLow
-                              ? "#f97316"
-                              : "#be185d",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
                         }}
                       >
-                        {isOut ? "Out" : isLow ? `⚠️${qty}` : qty}
-                      </span>
+                        <span
+                          style={{
+                            color: "#ec4899",
+                            fontWeight: "700",
+                            fontSize: 14,
+                          }}
+                        >
+                          {fmt(f.price)}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            borderRadius: 8,
+                            background: isOut
+                              ? "#fee2e2"
+                              : isLow
+                                ? "#fff7ed"
+                                : "#fdf2f8",
+                            color: isOut
+                              ? "#ef4444"
+                              : isLow
+                                ? "#f97316"
+                                : "#be185d",
+                          }}
+                        >
+                          {isOut ? "Out" : isLow ? `⚠️${qty}` : qty}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-
-          {/* Cart */}
           <div
             style={{
               width: mobile ? "100%" : "310px",
@@ -1037,7 +1132,6 @@ export default function App() {
               ))}
             </div>
             <div style={{ padding: 14, borderTop: "1px solid #fce7f3" }}>
-              {/* Payment Mode — 3 options including Card */}
               <div
                 style={{
                   display: "grid",
@@ -1125,9 +1219,6 @@ export default function App() {
       </div>
     );
 
-  // ════════════════════════════════════════════════════════════
-  // DASHBOARD SCREEN (Admin only)
-  // ════════════════════════════════════════════════════════════
   return (
     <div
       style={{
@@ -1140,7 +1231,277 @@ export default function App() {
       <style>{G}</style>
       <Toast />
 
-      {/* Delete Modal */}
+      {showFlavorModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "#1a1740",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 24,
+              padding: 28,
+              maxWidth: 420,
+              width: "100%",
+              animation: "slideUp 0.3s ease",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: "700",
+                marginBottom: 20,
+                color: "#fbbf24",
+              }}
+            >
+              {editingFlavor ? "✏️ Edit Flavour" : "➕ Add New Flavour"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.5)",
+                    marginBottom: 6,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                  }}
+                >
+                  Flavour Name *
+                </div>
+                <input
+                  className="fi"
+                  value={flavorForm.name}
+                  onChange={(e) =>
+                    setFlavorForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  placeholder="e.g. Mango Tango"
+                />
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "rgba(255,255,255,0.5)",
+                      marginBottom: 6,
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                    }}
+                  >
+                    Price (₹) *
+                  </div>
+                  <input
+                    className="fi"
+                    type="number"
+                    min="1"
+                    value={flavorForm.price}
+                    onChange={(e) =>
+                      setFlavorForm((f) => ({ ...f, price: e.target.value }))
+                    }
+                    placeholder="30"
+                  />
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "rgba(255,255,255,0.5)",
+                      marginBottom: 6,
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                    }}
+                  >
+                    Emoji
+                  </div>
+                  <input
+                    className="fi"
+                    value={flavorForm.emoji}
+                    onChange={(e) =>
+                      setFlavorForm((f) => ({ ...f, emoji: e.target.value }))
+                    }
+                    placeholder="🍦"
+                    style={{ fontSize: 22, textAlign: "center" }}
+                  />
+                </div>
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.5)",
+                    marginBottom: 6,
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                  }}
+                >
+                  Category *
+                </div>
+                <select
+                  className="fi"
+                  value={flavorForm.category}
+                  onChange={(e) =>
+                    setFlavorForm((f) => ({ ...f, category: e.target.value }))
+                  }
+                  style={{
+                    background: "#1a1740",
+                    color: "white",
+                    cursor: "pointer",
+                  }}
+                >
+                  {["Fruit", "Classic", "Premium", "Special"].map((c) => (
+                    <option key={c} value={c} style={{ background: "#1a1740" }}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div
+                style={{
+                  background: "rgba(255,255,255,0.04)",
+                  borderRadius: 12,
+                  padding: 14,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  border: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <span style={{ fontSize: 36 }}>{flavorForm.emoji || "🍦"}</span>
+                <div>
+                  <div style={{ fontWeight: "700", fontSize: 15 }}>
+                    {flavorForm.name || "Flavour Name"}
+                  </div>
+                  <div style={{ color: "#ec4899", fontSize: 13, marginTop: 2 }}>
+                    {flavorForm.price ? fmt(flavorForm.price) : "₹0"} •{" "}
+                    {flavorForm.category}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+              <button
+                onClick={() => setShowFlavorModal(false)}
+                style={{
+                  flex: 1,
+                  padding: "11px",
+                  background: "rgba(255,255,255,0.08)",
+                  border: "none",
+                  color: "white",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans',sans-serif",
+                  fontSize: 14,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveFlavor}
+                className="bp"
+                style={{ flex: 2, padding: "11px", borderRadius: 10 }}
+              >
+                {editingFlavor ? "✅ Save Changes" : "➕ Add Flavour"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {flavorDeleteConfirm && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              background: "#1e1b4b",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 20,
+              padding: 28,
+              maxWidth: 300,
+              width: "100%",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 36, marginBottom: 12 }}>🗑️</div>
+            <div style={{ fontSize: 16, fontWeight: "700", marginBottom: 8 }}>
+              Remove "{flavorDeleteConfirm.name}"?
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: "rgba(255,255,255,0.5)",
+                marginBottom: 20,
+              }}
+            >
+              It will be hidden from the POS. Past sales data is kept safe.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setFlavorDeleteConfirm(null)}
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  background: "rgba(255,255,255,0.1)",
+                  border: "none",
+                  color: "white",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans',sans-serif",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  handleDeleteFlavor(
+                    flavorDeleteConfirm.id,
+                    flavorDeleteConfirm.name,
+                  )
+                }
+                style={{
+                  flex: 1,
+                  padding: "10px",
+                  background: "#ef4444",
+                  border: "none",
+                  color: "white",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans',sans-serif",
+                  fontWeight: "700",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteConfirm && (
         <div
           style={{
@@ -1215,7 +1576,6 @@ export default function App() {
         </div>
       )}
 
-      {/* WhatsApp Modal */}
       {showPhoneInput && (
         <div
           style={{
@@ -1299,7 +1659,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
       <div
         style={{
           background: "rgba(255,255,255,0.04)",
@@ -1371,7 +1730,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Nav */}
       <div
         style={{
           padding: "10px 20px",
@@ -1385,6 +1743,7 @@ export default function App() {
           ["sales", "📊 Sales"],
           ["calendar", "📅 Calendar"],
           ["stock", "📦 Stock"],
+          ["flavours", "🍦 Flavours"],
           ["reports", "📋 Reports"],
         ].map(([tab, label]) => (
           <button
@@ -1398,7 +1757,6 @@ export default function App() {
       </div>
 
       <div style={{ padding: "16px 20px", maxWidth: 1200, margin: "0 auto" }}>
-        {/* ══ SALES TAB ══ */}
         {activeTab === "sales" && (
           <>
             <div
@@ -1456,8 +1814,6 @@ export default function App() {
                 📱 WhatsApp
               </button>
             </div>
-
-            {/* KPI Cards */}
             <div
               style={{
                 display: "grid",
@@ -1494,8 +1850,6 @@ export default function App() {
                 </div>
               ))}
             </div>
-
-            {/* 7 Day Chart */}
             <div className="sc" style={{ marginBottom: 20 }}>
               <div
                 style={{
@@ -1559,7 +1913,6 @@ export default function App() {
                 ))}
               </div>
             </div>
-
             <div
               style={{
                 display: "grid",
@@ -1568,7 +1921,6 @@ export default function App() {
                 marginBottom: 20,
               }}
             >
-              {/* Payment Split */}
               <div className="sc">
                 <div
                   style={{
@@ -1581,78 +1933,76 @@ export default function App() {
                   💳 Payment Split
                 </div>
                 {ana.totalRevenue > 0 ? (
-                  <>
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        height: 110,
-                        alignItems: "flex-end",
-                        justifyContent: "center",
-                      }}
-                    >
-                      {[
-                        {
-                          label: "UPI",
-                          val: ana.upiRev,
-                          count: ana.upiCount,
-                          c: "linear-gradient(180deg,#22d3ee,#0891b2)",
-                        },
-                        {
-                          label: "Cash",
-                          val: ana.cashRev,
-                          count: ana.cashCount,
-                          c: "linear-gradient(180deg,#fb923c,#ea580c)",
-                        },
-                        {
-                          label: "Card",
-                          val: ana.cardRev,
-                          count: ana.cardCount,
-                          c: "linear-gradient(180deg,#a78bfa,#7c3aed)",
-                        },
-                      ].map((b) => (
-                        <div
-                          key={b.label}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      height: 110,
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {[
+                      {
+                        label: "UPI",
+                        val: ana.upiRev,
+                        count: ana.upiCount,
+                        c: "linear-gradient(180deg,#22d3ee,#0891b2)",
+                      },
+                      {
+                        label: "Cash",
+                        val: ana.cashRev,
+                        count: ana.cashCount,
+                        c: "linear-gradient(180deg,#fb923c,#ea580c)",
+                      },
+                      {
+                        label: "Card",
+                        val: ana.cardRev,
+                        count: ana.cardCount,
+                        c: "linear-gradient(180deg,#a78bfa,#7c3aed)",
+                      },
+                    ].map((b) => (
+                      <div
+                        key={b.label}
+                        style={{
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          gap: 5,
+                        }}
+                      >
+                        <span
                           style={{
-                            flex: 1,
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: 5,
+                            fontSize: 10,
+                            color: "rgba(255,255,255,0.6)",
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: 10,
-                              color: "rgba(255,255,255,0.6)",
-                            }}
-                          >
-                            {fmt(b.val)}
-                          </span>
-                          <div
-                            style={{
-                              width: "70%",
-                              background: b.c,
-                              borderRadius: "5px 5px 0 0",
-                              height: `${ana.totalRevenue ? (b.val / ana.totalRevenue) * 90 : 2}px`,
-                              minHeight: 2,
-                            }}
-                          />
-                          <span style={{ fontSize: 12, color: "white" }}>
-                            {b.label}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: 10,
-                              color: "rgba(255,255,255,0.4)",
-                            }}
-                          >
-                            {b.count} txn
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
+                          {fmt(b.val)}
+                        </span>
+                        <div
+                          style={{
+                            width: "70%",
+                            background: b.c,
+                            borderRadius: "5px 5px 0 0",
+                            height: `${ana.totalRevenue ? (b.val / ana.totalRevenue) * 90 : 2}px`,
+                            minHeight: 2,
+                          }}
+                        />
+                        <span style={{ fontSize: 12, color: "white" }}>
+                          {b.label}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            color: "rgba(255,255,255,0.4)",
+                          }}
+                        >
+                          {b.count} txn
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div
                     style={{
@@ -1665,8 +2015,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-
-              {/* Top Flavors */}
               <div className="sc">
                 <div
                   style={{
@@ -1692,7 +2040,7 @@ export default function App() {
                 )}
                 {ana.topFlavors.map(([name, qty], i) => {
                   const max = ana.topFlavors[0]?.[1] || 1;
-                  const fl = FLAVORS.find((f) => f.name === name);
+                  const fl = flavors.find((f) => f.name === name);
                   return (
                     <div key={name} style={{ marginBottom: 10 }}>
                       <div
@@ -1729,8 +2077,6 @@ export default function App() {
                 })}
               </div>
             </div>
-
-            {/* Transactions */}
             <div className="sc">
               <div
                 style={{
@@ -1837,7 +2183,6 @@ export default function App() {
           </>
         )}
 
-        {/* ══ CALENDAR TAB ══ */}
         {activeTab === "calendar" && (
           <>
             <div
@@ -1896,8 +2241,6 @@ export default function App() {
                 </button>
               </div>
             </div>
-
-            {/* Calendar Grid */}
             <div className="sc" style={{ marginBottom: 20 }}>
               <div
                 style={{
@@ -1927,18 +2270,17 @@ export default function App() {
                   getCalendarDays(calMonth);
                 const cells = [];
                 for (let i = 0; i < firstDay; i++)
-                  cells.push(<div key={`empty-${i}`} />);
+                  cells.push(<div key={`e-${i}`} />);
                 for (let d = 1; d <= daysInMonth; d++) {
                   const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
                   const rev = salesByDate[dateStr] || 0;
                   const isToday = dateStr === today();
                   const isSelected = calDate === dateStr;
-                  const hasSales = rev > 0;
                   cells.push(
                     <div
                       key={dateStr}
                       onClick={() => setCalDate(isSelected ? null : dateStr)}
-                      className={`cal-day${hasSales ? " has-sales" : ""}${isSelected ? " selected" : ""}${isToday ? " today-cell" : ""}`}
+                      className={`cal-day${rev > 0 ? " has-sales" : ""}${isSelected ? " selected" : ""}${isToday ? " today-cell" : ""}`}
                     >
                       <div
                         style={{
@@ -1949,7 +2291,7 @@ export default function App() {
                       >
                         {d}
                       </div>
-                      {hasSales && (
+                      {rev > 0 && (
                         <div
                           style={{
                             fontSize: 9,
@@ -1957,7 +2299,7 @@ export default function App() {
                             fontWeight: "600",
                           }}
                         >
-                          {fmt(rev).replace("₹", "₹")}
+                          {fmt(rev)}
                         </div>
                       )}
                     </div>,
@@ -1989,8 +2331,6 @@ export default function App() {
                 <span>Click a date for details</span>
               </div>
             </div>
-
-            {/* Day Detail Panel */}
             {calDate && calAna && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
                 <div
@@ -2009,7 +2349,6 @@ export default function App() {
                     day: "numeric",
                   })}
                 </div>
-
                 {calAna.txnCount === 0 ? (
                   <div
                     className="sc"
@@ -2019,12 +2358,11 @@ export default function App() {
                       padding: 40,
                     }}
                   >
-                    <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>
-                    No sales recorded for this date
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>No
+                    sales recorded for this date
                   </div>
                 ) : (
                   <>
-                    {/* Day KPIs */}
                     <div
                       style={{
                         display: "grid",
@@ -2076,8 +2414,6 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-
-                    {/* Payment Breakdown */}
                     <div
                       style={{
                         display: "grid",
@@ -2180,8 +2516,6 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-
-                      {/* Flavors sold */}
                       <div className="sc">
                         <div
                           style={{
@@ -2191,63 +2525,49 @@ export default function App() {
                             color: "#fbbf24",
                           }}
                         >
-                          🍦 Flavours Sold ({calAna.topFlavors.length})
+                          🍦 Flavours Sold
                         </div>
-                        {calAna.topFlavors.length === 0 ? (
-                          <div
-                            style={{
-                              textAlign: "center",
-                              color: "rgba(255,255,255,0.3)",
-                              padding: 20,
-                            }}
-                          >
-                            No data
-                          </div>
-                        ) : (
-                          calAna.topFlavors.map(([name, qty], i) => {
-                            const max = calAna.topFlavors[0]?.[1] || 1;
-                            const fl = FLAVORS.find((f) => f.name === name);
-                            return (
-                              <div key={name} style={{ marginBottom: 8 }}>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    fontSize: 12,
-                                    marginBottom: 3,
-                                  }}
-                                >
-                                  <span>
-                                    {fl?.emoji} {name}
-                                  </span>
-                                  <span style={{ color: "#fbbf24" }}>
-                                    {qty} scoops
-                                  </span>
-                                </div>
-                                <div
-                                  style={{
-                                    background: "rgba(255,255,255,0.08)",
-                                    borderRadius: 4,
-                                    height: 5,
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      height: 5,
-                                      borderRadius: 4,
-                                      background: `hsl(${(i * 37 + 200) % 360},70%,60%)`,
-                                      width: `${(qty / max) * 100}%`,
-                                    }}
-                                  />
-                                </div>
+                        {calAna.topFlavors.map(([name, qty], i) => {
+                          const max = calAna.topFlavors[0]?.[1] || 1;
+                          const fl = flavors.find((f) => f.name === name);
+                          return (
+                            <div key={name} style={{ marginBottom: 8 }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  fontSize: 12,
+                                  marginBottom: 3,
+                                }}
+                              >
+                                <span>
+                                  {fl?.emoji} {name}
+                                </span>
+                                <span style={{ color: "#fbbf24" }}>
+                                  {qty} scoops
+                                </span>
                               </div>
-                            );
-                          })
-                        )}
+                              <div
+                                style={{
+                                  background: "rgba(255,255,255,0.08)",
+                                  borderRadius: 4,
+                                  height: 5,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    height: 5,
+                                    borderRadius: 4,
+                                    background: `hsl(${(i * 37 + 200) % 360},70%,60%)`,
+                                    width: `${(qty / max) * 100}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-
-                    {/* Transactions for that day */}
                     <div className="sc">
                       <div
                         style={{
@@ -2257,8 +2577,7 @@ export default function App() {
                           color: "#fbbf24",
                         }}
                       >
-                        🧾 All Transactions — {calDate} (
-                        {calAna.filtered.length})
+                        🧾 All Transactions — {calDate}
                       </div>
                       {calAna.filtered.map((sale) => {
                         const pc = payColor(sale.pay_mode);
@@ -2326,7 +2645,6 @@ export default function App() {
                 )}
               </div>
             )}
-
             {!calDate && (
               <div
                 style={{
@@ -2335,15 +2653,13 @@ export default function App() {
                   color: "rgba(255,255,255,0.3)",
                 }}
               >
-                <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-                Click any date in the calendar to see detailed analytics for
-                that day
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>Click
+                any date to see detailed analytics
               </div>
             )}
           </>
         )}
 
-        {/* ══ STOCK TAB ══ */}
         {activeTab === "stock" && (
           <>
             <div
@@ -2355,13 +2671,13 @@ export default function App() {
               }}
             >
               {[
-                ["📦", "Total", FLAVORS.length, "#fbbf24"],
+                ["📦", "Total", flavors.length, "#fbbf24"],
                 ["⚠️", "Low", lowStockItems.length, "#fb923c"],
                 ["🚨", "Out", outOfStockItems.length, "#ef4444"],
                 [
                   "✅",
                   "OK",
-                  FLAVORS.filter((f) => (stock[f.name] || 0) > 10).length,
+                  flavors.filter((f) => (stock[f.name] || 0) > 10).length,
                   "#34d399",
                 ],
               ].map(([icon, label, val, color]) => (
@@ -2389,7 +2705,6 @@ export default function App() {
                 </div>
               ))}
             </div>
-
             {lowStockItems.length > 0 && (
               <div
                 style={{
@@ -2408,8 +2723,6 @@ export default function App() {
                   .join(", ")}
               </div>
             )}
-
-            {/* Stock Carry Forward Info */}
             <div
               style={{
                 padding: "12px 16px",
@@ -2421,10 +2734,9 @@ export default function App() {
                 color: "#a78bfa",
               }}
             >
-              📦 Stock is automatically carried forward to the next day. Adjust
+              📦 Stock is automatically carried forward each day. Adjust
               quantities below as needed.
             </div>
-
             <div className="sc">
               <div
                 style={{
@@ -2443,7 +2755,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       const s = {};
-                      FLAVORS.forEach((f) => {
+                      flavors.forEach((f) => {
                         s[f.name] = DEFAULT_STOCK;
                       });
                       setStock(s);
@@ -2457,11 +2769,11 @@ export default function App() {
                   <button
                     onClick={() => {
                       const s = { ...stock };
-                      FLAVORS.forEach((f) => {
+                      flavors.forEach((f) => {
                         s[f.name] = Math.min((s[f.name] || 0) + 10, 200);
                       });
                       setStock(s);
-                      showToast("✅ Added 10 to all flavors!");
+                      showToast("✅ Added 10 to all!");
                     }}
                     className="bp"
                     style={{ fontSize: 12, padding: "8px 14px" }}
@@ -2477,7 +2789,7 @@ export default function App() {
                   gap: 10,
                 }}
               >
-                {FLAVORS.map((f) => {
+                {flavors.map((f) => {
                   const qty = stock[f.name] || 0;
                   const isOut = qty <= 0;
                   const isLow = qty > 0 && qty < 10;
@@ -2618,7 +2930,233 @@ export default function App() {
           </>
         )}
 
-        {/* ══ REPORTS TAB ══ */}
+        {activeTab === "flavours" && (
+          <>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 20,
+                flexWrap: "wrap",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div
+                  style={{ fontSize: 16, fontWeight: "700", marginBottom: 4 }}
+                >
+                  🍦 Flavour Manager
+                </div>
+                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
+                  {flavors.length} active flavours in menu
+                </div>
+              </div>
+              <button
+                className="bp"
+                style={{ padding: "10px 22px" }}
+                onClick={openAddFlavor}
+              >
+                ➕ Add New Flavour
+              </button>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                marginBottom: 16,
+                flexWrap: "wrap",
+              }}
+            >
+              <input
+                value={flavorSearchQ}
+                onChange={(e) => setFlavorSearchQ(e.target.value)}
+                placeholder="🔍 Search flavours..."
+                style={{
+                  flex: 1,
+                  minWidth: 160,
+                  padding: "9px 14px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: "rgba(255,255,255,0.06)",
+                  color: "white",
+                  fontSize: 13,
+                  outline: "none",
+                }}
+              />
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {["All", "Fruit", "Classic", "Premium", "Special"].map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setFlavorFilterCat(c)}
+                    style={{
+                      padding: "8px 14px",
+                      borderRadius: 20,
+                      border: `1px solid ${flavorFilterCat === c ? "#ec4899" : "rgba(255,255,255,0.15)"}`,
+                      background:
+                        flavorFilterCat === c
+                          ? "rgba(236,72,153,0.2)"
+                          : "transparent",
+                      color:
+                        flavorFilterCat === c
+                          ? "#ec4899"
+                          : "rgba(255,255,255,0.5)",
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontFamily: "'DM Sans',sans-serif",
+                    }}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {["Fruit", "Classic", "Premium", "Special"]
+              .filter(
+                (cat) => flavorFilterCat === "All" || flavorFilterCat === cat,
+              )
+              .map((cat) => {
+                const catFlavors = managerFlavors.filter(
+                  (f) => f.category === cat,
+                );
+                if (catFlavors.length === 0) return null;
+                const catIcon = {
+                  Fruit: "🍓",
+                  Classic: "🍫",
+                  Premium: "🌰",
+                  Special: "✨",
+                }[cat];
+                return (
+                  <div key={cat} className="sc" style={{ marginBottom: 16 }}>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: "700",
+                        color: "#fbbf24",
+                        marginBottom: 14,
+                      }}
+                    >
+                      {catIcon} {cat} ({catFlavors.length})
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      {catFlavors.map((f) => (
+                        <div
+                          key={f.id || f.name}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            padding: "10px 12px",
+                            background: "rgba(255,255,255,0.04)",
+                            borderRadius: 12,
+                            border: "1px solid rgba(255,255,255,0.06)",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 28,
+                              minWidth: 38,
+                              textAlign: "center",
+                            }}
+                          >
+                            {f.emoji}
+                          </span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 14, fontWeight: "600" }}>
+                              {f.name}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color: "rgba(255,255,255,0.4)",
+                                marginTop: 2,
+                              }}
+                            >
+                              {f.category} • Stock:{" "}
+                              <span
+                                style={{
+                                  color:
+                                    (stock[f.name] || 0) <= 0
+                                      ? "#f87171"
+                                      : (stock[f.name] || 0) < 10
+                                        ? "#fb923c"
+                                        : "#34d399",
+                                }}
+                              >
+                                {stock[f.name] || 0}
+                              </span>
+                            </div>
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 17,
+                              fontWeight: "700",
+                              color: "#ec4899",
+                              minWidth: 55,
+                              textAlign: "right",
+                            }}
+                          >
+                            {fmt(f.price)}
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button
+                              onClick={() => openEditFlavor(f)}
+                              style={{
+                                background: "rgba(251,191,36,0.15)",
+                                border: "1px solid rgba(251,191,36,0.3)",
+                                color: "#fbbf24",
+                                borderRadius: 8,
+                                padding: "6px 12px",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                fontFamily: "'DM Sans',sans-serif",
+                              }}
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              onClick={() => setFlavorDeleteConfirm(f)}
+                              style={{
+                                background: "rgba(239,68,68,0.15)",
+                                border: "1px solid rgba(239,68,68,0.3)",
+                                color: "#fca5a5",
+                                borderRadius: 8,
+                                padding: "6px 12px",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                fontFamily: "'DM Sans',sans-serif",
+                              }}
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            {managerFlavors.length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: 60,
+                  color: "rgba(255,255,255,0.3)",
+                }}
+              >
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>No
+                flavours found. Add one!
+              </div>
+            )}
+          </>
+        )}
+
         {activeTab === "reports" && (
           <>
             <div
@@ -2718,7 +3256,7 @@ export default function App() {
               )}
               {reportAna.topFlavors.map(([name, qty], i) => {
                 const max = reportAna.topFlavors[0]?.[1] || 1;
-                const fl = FLAVORS.find((f) => f.name === name);
+                const fl = flavors.find((f) => f.name === name);
                 return (
                   <div key={name} style={{ marginBottom: 10 }}>
                     <div
