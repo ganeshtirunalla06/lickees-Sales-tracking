@@ -37,7 +37,7 @@ const FALLBACK_FLAVORS = [
 ];
 
 const CATEGORIES = ["All", "Fruit", "Classic", "Premium", "Special"];
-const DEFAULT_STOCK = 50;
+const DEFAULT_STOCK = 40;
 
 const USERS = {
   admin: { password: "admin123", role: "admin", name: "Admin" },
@@ -69,7 +69,6 @@ const saveSale = async (entry) => {
 const deleteSaleById = async (id) => {
   await supabase.from("sales").delete().eq("id", id);
 };
-
 const loadFlavors = async () => {
   const { data, error } = await supabase
     .from("flavors")
@@ -79,39 +78,6 @@ const loadFlavors = async () => {
     .order("name");
   if (error || !data || data.length === 0) return FALLBACK_FLAVORS;
   return data;
-};
-const addFlavor = async (flavor) => {
-  const { error } = await supabase
-    .from("flavors")
-    .insert([
-      {
-        name: flavor.name,
-        price: Number(flavor.price),
-        emoji: flavor.emoji || "🍦",
-        category: flavor.category,
-        active: true,
-      },
-    ]);
-  return error;
-};
-const updateFlavor = async (id, updates) => {
-  const { error } = await supabase
-    .from("flavors")
-    .update({
-      name: updates.name,
-      price: Number(updates.price),
-      emoji: updates.emoji,
-      category: updates.category,
-    })
-    .eq("id", id);
-  return error;
-};
-const deactivateFlavor = async (id) => {
-  const { error } = await supabase
-    .from("flavors")
-    .update({ active: false })
-    .eq("id", id);
-  return error;
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -126,8 +92,12 @@ const payColor = (mode) => {
 
 const loadStock = () => {
   try {
-    const raw = localStorage.getItem("lickees_stock_v2");
-    if (raw) return JSON.parse(raw);
+    const raw = localStorage.getItem("lickees_stock_v3");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.date === new Date().toISOString().slice(0, 10))
+        return parsed.levels;
+    }
   } catch (e) {}
   const s = {};
   FALLBACK_FLAVORS.forEach((f) => {
@@ -135,18 +105,35 @@ const loadStock = () => {
   });
   return s;
 };
+const saveStock = (levels) => {
+  localStorage.setItem(
+    "lickees_stock_v3",
+    JSON.stringify({ date: new Date().toISOString().slice(0, 10), levels }),
+  );
+};
+const mergeStockWithFlavors = (cur, flavors) => {
+  let changed = false;
+  const merged = { ...cur };
+  flavors.forEach((f) => {
+    if (merged[f.name] == null) {
+      merged[f.name] = DEFAULT_STOCK;
+      changed = true;
+    }
+  });
+  return changed ? merged : cur;
+};
 
 const downloadCSV = (sales, label) => {
   const rows = [["Date", "Time", "Items", "Total", "Payment"]];
-  sales.forEach((s) => {
+  sales.forEach((s) =>
     rows.push([
       s.date,
       s.time,
       (s.items || []).map((i) => `${i.qty}x${i.name}`).join("|"),
       s.total,
       s.pay_mode,
-    ]);
-  });
+    ]),
+  );
   const csv = rows.map((r) => r.join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const a = document.createElement("a");
@@ -154,7 +141,6 @@ const downloadCSV = (sales, label) => {
   a.download = `lickees-${label}.csv`;
   a.click();
 };
-
 const sendWhatsApp = (ana, phone) => {
   const msg = `🍨 *Lickees Daily Summary - ${today()}*\n\n💰 Total: ${fmt(ana.totalRevenue)}\n🧾 Transactions: ${ana.txnCount}\n🍦 Scoops: ${ana.totalScoops}\n📱 UPI: ${fmt(ana.upiRev)}\n💵 Cash: ${fmt(ana.cashRev)}\n💳 Card: ${fmt(ana.cardRev)}\n🏆 Top: ${ana.topFlavors[0]?.[0] || "N/A"}\n\n_Sent from Lickees POS_`;
   window.open(
@@ -222,23 +208,13 @@ export default function App() {
     () => localStorage.getItem("lickees_phone") || "",
   );
   const [showPhoneInput, setShowPhoneInput] = useState(false);
-  const [activeTab, setActiveTab] = useState("sales");
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [activeTab, setActiveTab] = useState("sales"); // ✅ was missing
   const [calDate, setCalDate] = useState(null);
   const [calMonth, setCalMonth] = useState(() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
   });
-  const [showFlavorModal, setShowFlavorModal] = useState(false);
-  const [editingFlavor, setEditingFlavor] = useState(null);
-  const [flavorForm, setFlavorForm] = useState({
-    name: "",
-    price: "",
-    emoji: "🍦",
-    category: "Classic",
-  });
-  const [flavorDeleteConfirm, setFlavorDeleteConfirm] = useState(null);
-  const [flavorSearchQ, setFlavorSearchQ] = useState("");
-  const [flavorFilterCat, setFlavorFilterCat] = useState("All");
 
   useEffect(() => {
     const saved = localStorage.getItem("lickees_user");
@@ -259,21 +235,18 @@ export default function App() {
       loadFlavors().then((data) => {
         setFlavors(data);
         setFlavorsLoading(false);
+        setStock((cur) => mergeStockWithFlavors(cur, data));
       });
     }
   }, [screen]);
 
   useEffect(() => {
-    localStorage.setItem("lickees_stock_v2", JSON.stringify(stock));
+    saveStock(stock);
   }, [stock]);
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
-  };
-  const refreshFlavors = async () => {
-    const data = await loadFlavors();
-    setFlavors(data);
   };
 
   const handleLogin = () => {
@@ -296,61 +269,8 @@ export default function App() {
   };
   const isAdmin = currentUser?.role === "admin";
 
-  const openAddFlavor = () => {
-    setEditingFlavor(null);
-    setFlavorForm({ name: "", price: "", emoji: "🍦", category: "Classic" });
-    setShowFlavorModal(true);
-  };
-  const openEditFlavor = (f) => {
-    setEditingFlavor(f);
-    setFlavorForm({
-      name: f.name,
-      price: f.price,
-      emoji: f.emoji,
-      category: f.category,
-    });
-    setShowFlavorModal(true);
-  };
-
-  const handleSaveFlavor = async () => {
-    if (!flavorForm.name.trim())
-      return showToast("❌ Name is required!", "error");
-    if (
-      !flavorForm.price ||
-      isNaN(flavorForm.price) ||
-      Number(flavorForm.price) <= 0
-    )
-      return showToast("❌ Enter a valid price!", "error");
-    if (editingFlavor) {
-      const error = await updateFlavor(editingFlavor.id, flavorForm);
-      if (error) return showToast("❌ Failed to update!", "error");
-      showToast(`✅ ${flavorForm.name} updated!`);
-    } else {
-      if (
-        flavors.find(
-          (f) => f.name.toLowerCase() === flavorForm.name.toLowerCase(),
-        )
-      )
-        return showToast("❌ Flavour already exists!", "error");
-      const error = await addFlavor(flavorForm);
-      if (error) return showToast("❌ Failed to add flavour!", "error");
-      setStock((s) => ({ ...s, [flavorForm.name]: DEFAULT_STOCK }));
-      showToast(`✅ ${flavorForm.emoji} ${flavorForm.name} added!`);
-    }
-    setShowFlavorModal(false);
-    await refreshFlavors();
-  };
-
-  const handleDeleteFlavor = async (id, name) => {
-    const error = await deactivateFlavor(id);
-    if (error) return showToast("❌ Failed to remove!", "error");
-    showToast(`🗑️ ${name} removed from menu!`);
-    setFlavorDeleteConfirm(null);
-    await refreshFlavors();
-  };
-
   const addToCart = (flavor) => {
-    if ((stock[flavor.name] || 0) <= 0)
+    if ((stock[flavor.name] ?? DEFAULT_STOCK) <= 0)
       return showToast(`❌ ${flavor.name} is out of stock!`, "error");
     setCart((c) => {
       const ex = c.find((i) => i.name === flavor.name);
@@ -387,7 +307,10 @@ export default function App() {
     if (error) return showToast("❌ Failed to save sale!", "error");
     const newStock = { ...stock };
     cart.forEach((i) => {
-      newStock[i.name] = Math.max(0, (newStock[i.name] || 0) - i.qty);
+      newStock[i.name] = Math.max(
+        0,
+        (newStock[i.name] ?? DEFAULT_STOCK) - i.qty,
+      );
     });
     setStock(newStock);
     const lowItems = cart.filter(
@@ -496,21 +419,30 @@ export default function App() {
     return { firstDay, daysInMonth, salesByDate, year: y, month: m };
   };
 
-  const displayFlavors = flavors.filter(
-    (f) =>
-      (filterCat === "All" || f.category === filterCat) &&
-      f.name.toLowerCase().includes(searchQ.toLowerCase()),
+  // ✅ Sort by price low → high
+  const displayFlavors = flavors
+    .filter(
+      (f) =>
+        (filterCat === "All" || f.category === filterCat) &&
+        f.name.toLowerCase().includes(searchQ.toLowerCase()),
+    )
+    .sort((a, b) => a.price - b.price);
+
+  const lowStockItems = flavors.filter((f) => {
+    const q = stock[f.name] ?? DEFAULT_STOCK;
+    return q > 0 && q < 10;
+  });
+  const outOfStockItems = flavors.filter(
+    (f) => (stock[f.name] ?? DEFAULT_STOCK) <= 0,
   );
-  const lowStockItems = flavors.filter((f) => (stock[f.name] || 0) < 10);
-  const outOfStockItems = flavors.filter((f) => (stock[f.name] || 0) <= 0);
+  const alertItems = [
+    ...outOfStockItems.map((f) => ({ ...f, alertType: "out" })),
+    ...lowStockItems.map((f) => ({ ...f, alertType: "low" })),
+  ];
+
   const mobile = isMobile();
   const seven = last7Days();
   const maxRev = Math.max(...seven.map((d) => d.rev), 1);
-  const managerFlavors = flavors.filter(
-    (f) =>
-      (flavorFilterCat === "All" || f.category === flavorFilterCat) &&
-      f.name.toLowerCase().includes(flavorSearchQ.toLowerCase()),
-  );
 
   const Toast = () =>
     toast ? (
@@ -536,6 +468,7 @@ export default function App() {
       </div>
     ) : null;
 
+  // ─── LOGIN ─────────────────────────────────────────────────────────────────
   if (screen === "login")
     return (
       <div
@@ -683,6 +616,7 @@ export default function App() {
       </div>
     );
 
+  // ─── INTRO ─────────────────────────────────────────────────────────────────
   if (screen === "intro")
     return (
       <div
@@ -814,6 +748,7 @@ export default function App() {
       </div>
     );
 
+  // ─── POS ───────────────────────────────────────────────────────────────────
   if (screen === "pos")
     return (
       <div
@@ -894,6 +829,7 @@ export default function App() {
             gap: 8,
             overflowX: "auto",
             flexShrink: 0,
+            flexWrap: mobile ? "wrap" : "nowrap",
           }}
         >
           {CATEGORIES.map((c) => (
@@ -908,15 +844,16 @@ export default function App() {
           <input
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
-            placeholder="🔍 Search..."
+            placeholder="🔍 Search flavours..."
             style={{
-              marginLeft: "auto",
-              padding: "6px 14px",
+              marginLeft: mobile ? 0 : "auto",
+              padding: mobile ? "10px 16px" : "6px 14px",
               borderRadius: 30,
               border: "1px solid #e5e7eb",
-              fontSize: 13,
+              fontSize: mobile ? 15 : 13,
               outline: "none",
-              minWidth: 120,
+              minWidth: mobile ? "100%" : 140,
+              marginTop: mobile ? 4 : 0,
             }}
           />
         </div>
@@ -943,7 +880,7 @@ export default function App() {
                 }}
               >
                 {displayFlavors.map((f) => {
-                  const qty = stock[f.name] || 0;
+                  const qty = stock[f.name] ?? DEFAULT_STOCK;
                   const isOut = qty <= 0;
                   const isLow = qty > 0 && qty < 10;
                   return (
@@ -1219,6 +1156,7 @@ export default function App() {
       </div>
     );
 
+  // ─── DASHBOARD ─────────────────────────────────────────────────────────────
   return (
     <div
       style={{
@@ -1231,275 +1169,11 @@ export default function App() {
       <style>{G}</style>
       <Toast />
 
-      {showFlavorModal && (
+      {showNotifications && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            zIndex: 9999,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "#1a1740",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 24,
-              padding: 28,
-              maxWidth: 420,
-              width: "100%",
-              animation: "slideUp 0.3s ease",
-            }}
-          >
-            <div
-              style={{
-                fontSize: 18,
-                fontWeight: "700",
-                marginBottom: 20,
-                color: "#fbbf24",
-              }}
-            >
-              {editingFlavor ? "✏️ Edit Flavour" : "➕ Add New Flavour"}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "rgba(255,255,255,0.5)",
-                    marginBottom: 6,
-                    textTransform: "uppercase",
-                    letterSpacing: 1,
-                  }}
-                >
-                  Flavour Name *
-                </div>
-                <input
-                  className="fi"
-                  value={flavorForm.name}
-                  onChange={(e) =>
-                    setFlavorForm((f) => ({ ...f, name: e.target.value }))
-                  }
-                  placeholder="e.g. Mango Tango"
-                />
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 12,
-                }}
-              >
-                <div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "rgba(255,255,255,0.5)",
-                      marginBottom: 6,
-                      textTransform: "uppercase",
-                      letterSpacing: 1,
-                    }}
-                  >
-                    Price (₹) *
-                  </div>
-                  <input
-                    className="fi"
-                    type="number"
-                    min="1"
-                    value={flavorForm.price}
-                    onChange={(e) =>
-                      setFlavorForm((f) => ({ ...f, price: e.target.value }))
-                    }
-                    placeholder="30"
-                  />
-                </div>
-                <div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "rgba(255,255,255,0.5)",
-                      marginBottom: 6,
-                      textTransform: "uppercase",
-                      letterSpacing: 1,
-                    }}
-                  >
-                    Emoji
-                  </div>
-                  <input
-                    className="fi"
-                    value={flavorForm.emoji}
-                    onChange={(e) =>
-                      setFlavorForm((f) => ({ ...f, emoji: e.target.value }))
-                    }
-                    placeholder="🍦"
-                    style={{ fontSize: 22, textAlign: "center" }}
-                  />
-                </div>
-              </div>
-              <div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "rgba(255,255,255,0.5)",
-                    marginBottom: 6,
-                    textTransform: "uppercase",
-                    letterSpacing: 1,
-                  }}
-                >
-                  Category *
-                </div>
-                <select
-                  className="fi"
-                  value={flavorForm.category}
-                  onChange={(e) =>
-                    setFlavorForm((f) => ({ ...f, category: e.target.value }))
-                  }
-                  style={{
-                    background: "#1a1740",
-                    color: "white",
-                    cursor: "pointer",
-                  }}
-                >
-                  {["Fruit", "Classic", "Premium", "Special"].map((c) => (
-                    <option key={c} value={c} style={{ background: "#1a1740" }}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.04)",
-                  borderRadius: 12,
-                  padding: 14,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  border: "1px solid rgba(255,255,255,0.08)",
-                }}
-              >
-                <span style={{ fontSize: 36 }}>{flavorForm.emoji || "🍦"}</span>
-                <div>
-                  <div style={{ fontWeight: "700", fontSize: 15 }}>
-                    {flavorForm.name || "Flavour Name"}
-                  </div>
-                  <div style={{ color: "#ec4899", fontSize: 13, marginTop: 2 }}>
-                    {flavorForm.price ? fmt(flavorForm.price) : "₹0"} •{" "}
-                    {flavorForm.category}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-              <button
-                onClick={() => setShowFlavorModal(false)}
-                style={{
-                  flex: 1,
-                  padding: "11px",
-                  background: "rgba(255,255,255,0.08)",
-                  border: "none",
-                  color: "white",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  fontFamily: "'DM Sans',sans-serif",
-                  fontSize: 14,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveFlavor}
-                className="bp"
-                style={{ flex: 2, padding: "11px", borderRadius: 10 }}
-              >
-                {editingFlavor ? "✅ Save Changes" : "➕ Add Flavour"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {flavorDeleteConfirm && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            zIndex: 9999,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "#1e1b4b",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: 20,
-              padding: 28,
-              maxWidth: 300,
-              width: "100%",
-              textAlign: "center",
-            }}
-          >
-            <div style={{ fontSize: 36, marginBottom: 12 }}>🗑️</div>
-            <div style={{ fontSize: 16, fontWeight: "700", marginBottom: 8 }}>
-              Remove "{flavorDeleteConfirm.name}"?
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                color: "rgba(255,255,255,0.5)",
-                marginBottom: 20,
-              }}
-            >
-              It will be hidden from the POS. Past sales data is kept safe.
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => setFlavorDeleteConfirm(null)}
-                style={{
-                  flex: 1,
-                  padding: "10px",
-                  background: "rgba(255,255,255,0.1)",
-                  border: "none",
-                  color: "white",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  fontFamily: "'DM Sans',sans-serif",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() =>
-                  handleDeleteFlavor(
-                    flavorDeleteConfirm.id,
-                    flavorDeleteConfirm.name,
-                  )
-                }
-                style={{
-                  flex: 1,
-                  padding: "10px",
-                  background: "#ef4444",
-                  border: "none",
-                  color: "white",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  fontFamily: "'DM Sans',sans-serif",
-                  fontWeight: "700",
-                }}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
+          onClick={() => setShowNotifications(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 9998 }}
+        />
       )}
 
       {deleteConfirm && (
@@ -1659,6 +1333,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Header */}
       <div
         style={{
           background: "rgba(255,255,255,0.04)",
@@ -1703,8 +1378,198 @@ export default function App() {
           >
             👑 Admin
           </span>
+
+          {/* Notification Bell */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowNotifications((v) => !v)}
+              style={{
+                background:
+                  alertItems.length > 0
+                    ? "rgba(239,68,68,0.15)"
+                    : "rgba(255,255,255,0.06)",
+                border:
+                  alertItems.length > 0
+                    ? "1px solid rgba(239,68,68,0.4)"
+                    : "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "50%",
+                width: 36,
+                height: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                fontSize: 16,
+                position: "relative",
+                transition: "all 0.2s",
+              }}
+            >
+              🔔
+              {alertItems.length > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    background: "#ef4444",
+                    color: "white",
+                    borderRadius: "50%",
+                    width: 18,
+                    height: 18,
+                    fontSize: 10,
+                    fontWeight: "700",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "2px solid #0f0c29",
+                    animation: "pulse 2s ease infinite",
+                  }}
+                >
+                  {alertItems.length}
+                </span>
+              )}
+            </button>
+            {showNotifications && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 44,
+                  left: 0,
+                  width: 300,
+                  background: "#1a1740",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 16,
+                  zIndex: 9999,
+                  boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+                  animation: "slideUp 0.2s ease",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "14px 16px",
+                    borderBottom: "1px solid rgba(255,255,255,0.08)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ fontWeight: "700", fontSize: 14 }}>
+                    🔔 Stock Alerts
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      padding: "2px 8px",
+                      borderRadius: 20,
+                      background:
+                        alertItems.length > 0
+                          ? "rgba(239,68,68,0.2)"
+                          : "rgba(52,211,153,0.2)",
+                      color: alertItems.length > 0 ? "#f87171" : "#34d399",
+                    }}
+                  >
+                    {alertItems.length > 0
+                      ? `${alertItems.length} alert${alertItems.length > 1 ? "s" : ""}`
+                      : "All good ✓"}
+                  </div>
+                </div>
+                <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                  {alertItems.length === 0 ? (
+                    <div
+                      style={{
+                        padding: 28,
+                        textAlign: "center",
+                        color: "rgba(255,255,255,0.4)",
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>All
+                      flavours are well stocked!
+                    </div>
+                  ) : (
+                    alertItems.map((f) => {
+                      const qty = stock[f.name] ?? DEFAULT_STOCK;
+                      const isOut = f.alertType === "out";
+                      return (
+                        <div
+                          key={f.name}
+                          style={{
+                            padding: "10px 16px",
+                            borderBottom: "1px solid rgba(255,255,255,0.05)",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                          }}
+                        >
+                          <span style={{ fontSize: 22 }}>{f.emoji}</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: "600" }}>
+                              {f.name}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: isOut ? "#f87171" : "#fb923c",
+                                marginTop: 2,
+                              }}
+                            >
+                              {isOut ? "Out of stock!" : `Only ${qty} left`}
+                            </div>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: "3px 8px",
+                              borderRadius: 20,
+                              background: isOut
+                                ? "rgba(239,68,68,0.2)"
+                                : "rgba(249,115,22,0.2)",
+                              color: isOut ? "#f87171" : "#fb923c",
+                              fontWeight: "700",
+                            }}
+                          >
+                            {isOut ? "OUT" : "LOW"}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                {alertItems.length > 0 && (
+                  <div
+                    style={{
+                      padding: "10px 16px",
+                      borderTop: "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    <button
+                      onClick={() => {
+                        setShowNotifications(false);
+                        setActiveTab("stock");
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "9px",
+                        background: "linear-gradient(135deg,#ec4899,#f97316)",
+                        border: "none",
+                        color: "white",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        fontFamily: "'DM Sans',sans-serif",
+                        fontSize: 13,
+                        fontWeight: "600",
+                      }}
+                    >
+                      📦 Go to Stock Manager
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
             className="bp"
             style={{ padding: "8px 18px", fontSize: 13 }}
@@ -1730,6 +1595,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* Tab Bar — 4 tabs only, no Flavours */}
       <div
         style={{
           padding: "10px 20px",
@@ -1743,7 +1609,6 @@ export default function App() {
           ["sales", "📊 Sales"],
           ["calendar", "📅 Calendar"],
           ["stock", "📦 Stock"],
-          ["flavours", "🍦 Flavours"],
           ["reports", "📋 Reports"],
         ].map(([tab, label]) => (
           <button
@@ -1757,6 +1622,7 @@ export default function App() {
       </div>
 
       <div style={{ padding: "16px 20px", maxWidth: 1200, margin: "0 auto" }}>
+        {/* SALES */}
         {activeTab === "sales" && (
           <>
             <div
@@ -2183,6 +2049,7 @@ export default function App() {
           </>
         )}
 
+        {/* CALENDAR */}
         {activeTab === "calendar" && (
           <>
             <div
@@ -2660,6 +2527,7 @@ export default function App() {
           </>
         )}
 
+        {/* STOCK */}
         {activeTab === "stock" && (
           <>
             <div
@@ -2677,7 +2545,8 @@ export default function App() {
                 [
                   "✅",
                   "OK",
-                  flavors.filter((f) => (stock[f.name] || 0) > 10).length,
+                  flavors.filter((f) => (stock[f.name] ?? DEFAULT_STOCK) > 10)
+                    .length,
                   "#34d399",
                 ],
               ].map(([icon, label, val, color]) => (
@@ -2719,7 +2588,10 @@ export default function App() {
               >
                 ⚠️ Low:{" "}
                 {lowStockItems
-                  .map((f) => `${f.emoji}${f.name}(${stock[f.name]})`)
+                  .map(
+                    (f) =>
+                      `${f.emoji}${f.name}(${stock[f.name] ?? DEFAULT_STOCK})`,
+                  )
                   .join(", ")}
               </div>
             )}
@@ -2734,7 +2606,7 @@ export default function App() {
                 color: "#a78bfa",
               }}
             >
-              📦 Stock is automatically carried forward each day. Adjust
+              📦 Stock resets to {DEFAULT_STOCK} every new day. Adjust
               quantities below as needed.
             </div>
             <div className="sc">
@@ -2759,7 +2631,7 @@ export default function App() {
                         s[f.name] = DEFAULT_STOCK;
                       });
                       setStock(s);
-                      showToast("✅ All stock reset to 50!");
+                      showToast(`✅ All stock reset to ${DEFAULT_STOCK}!`);
                     }}
                     className="bo"
                     style={{ fontSize: 12 }}
@@ -2770,7 +2642,10 @@ export default function App() {
                     onClick={() => {
                       const s = { ...stock };
                       flavors.forEach((f) => {
-                        s[f.name] = Math.min((s[f.name] || 0) + 10, 200);
+                        s[f.name] = Math.min(
+                          (s[f.name] ?? DEFAULT_STOCK) + 10,
+                          200,
+                        );
                       });
                       setStock(s);
                       showToast("✅ Added 10 to all!");
@@ -2790,7 +2665,7 @@ export default function App() {
                 }}
               >
                 {flavors.map((f) => {
-                  const qty = stock[f.name] || 0;
+                  const qty = stock[f.name] ?? DEFAULT_STOCK;
                   const isOut = qty <= 0;
                   const isLow = qty > 0 && qty < 10;
                   return (
@@ -2835,7 +2710,10 @@ export default function App() {
                             onClick={() =>
                               setStock((s) => ({
                                 ...s,
-                                [f.name]: Math.max(0, (s[f.name] || 0) - 1),
+                                [f.name]: Math.max(
+                                  0,
+                                  (s[f.name] ?? DEFAULT_STOCK) - 1,
+                                ),
                               }))
                             }
                             style={{
@@ -2882,7 +2760,7 @@ export default function App() {
                             onClick={() =>
                               setStock((s) => ({
                                 ...s,
-                                [f.name]: (s[f.name] || 0) + 1,
+                                [f.name]: (s[f.name] ?? DEFAULT_STOCK) + 1,
                               }))
                             }
                             style={{
@@ -2930,233 +2808,7 @@ export default function App() {
           </>
         )}
 
-        {activeTab === "flavours" && (
-          <>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 20,
-                flexWrap: "wrap",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div
-                  style={{ fontSize: 16, fontWeight: "700", marginBottom: 4 }}
-                >
-                  🍦 Flavour Manager
-                </div>
-                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>
-                  {flavors.length} active flavours in menu
-                </div>
-              </div>
-              <button
-                className="bp"
-                style={{ padding: "10px 22px" }}
-                onClick={openAddFlavor}
-              >
-                ➕ Add New Flavour
-              </button>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                marginBottom: 16,
-                flexWrap: "wrap",
-              }}
-            >
-              <input
-                value={flavorSearchQ}
-                onChange={(e) => setFlavorSearchQ(e.target.value)}
-                placeholder="🔍 Search flavours..."
-                style={{
-                  flex: 1,
-                  minWidth: 160,
-                  padding: "9px 14px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  background: "rgba(255,255,255,0.06)",
-                  color: "white",
-                  fontSize: 13,
-                  outline: "none",
-                }}
-              />
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {["All", "Fruit", "Classic", "Premium", "Special"].map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setFlavorFilterCat(c)}
-                    style={{
-                      padding: "8px 14px",
-                      borderRadius: 20,
-                      border: `1px solid ${flavorFilterCat === c ? "#ec4899" : "rgba(255,255,255,0.15)"}`,
-                      background:
-                        flavorFilterCat === c
-                          ? "rgba(236,72,153,0.2)"
-                          : "transparent",
-                      color:
-                        flavorFilterCat === c
-                          ? "#ec4899"
-                          : "rgba(255,255,255,0.5)",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontFamily: "'DM Sans',sans-serif",
-                    }}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {["Fruit", "Classic", "Premium", "Special"]
-              .filter(
-                (cat) => flavorFilterCat === "All" || flavorFilterCat === cat,
-              )
-              .map((cat) => {
-                const catFlavors = managerFlavors.filter(
-                  (f) => f.category === cat,
-                );
-                if (catFlavors.length === 0) return null;
-                const catIcon = {
-                  Fruit: "🍓",
-                  Classic: "🍫",
-                  Premium: "🌰",
-                  Special: "✨",
-                }[cat];
-                return (
-                  <div key={cat} className="sc" style={{ marginBottom: 16 }}>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        fontWeight: "700",
-                        color: "#fbbf24",
-                        marginBottom: 14,
-                      }}
-                    >
-                      {catIcon} {cat} ({catFlavors.length})
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                      }}
-                    >
-                      {catFlavors.map((f) => (
-                        <div
-                          key={f.id || f.name}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 12,
-                            padding: "10px 12px",
-                            background: "rgba(255,255,255,0.04)",
-                            borderRadius: 12,
-                            border: "1px solid rgba(255,255,255,0.06)",
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: 28,
-                              minWidth: 38,
-                              textAlign: "center",
-                            }}
-                          >
-                            {f.emoji}
-                          </span>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 14, fontWeight: "600" }}>
-                              {f.name}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 12,
-                                color: "rgba(255,255,255,0.4)",
-                                marginTop: 2,
-                              }}
-                            >
-                              {f.category} • Stock:{" "}
-                              <span
-                                style={{
-                                  color:
-                                    (stock[f.name] || 0) <= 0
-                                      ? "#f87171"
-                                      : (stock[f.name] || 0) < 10
-                                        ? "#fb923c"
-                                        : "#34d399",
-                                }}
-                              >
-                                {stock[f.name] || 0}
-                              </span>
-                            </div>
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 17,
-                              fontWeight: "700",
-                              color: "#ec4899",
-                              minWidth: 55,
-                              textAlign: "right",
-                            }}
-                          >
-                            {fmt(f.price)}
-                          </div>
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button
-                              onClick={() => openEditFlavor(f)}
-                              style={{
-                                background: "rgba(251,191,36,0.15)",
-                                border: "1px solid rgba(251,191,36,0.3)",
-                                color: "#fbbf24",
-                                borderRadius: 8,
-                                padding: "6px 12px",
-                                cursor: "pointer",
-                                fontSize: 12,
-                                fontFamily: "'DM Sans',sans-serif",
-                              }}
-                            >
-                              ✏️ Edit
-                            </button>
-                            <button
-                              onClick={() => setFlavorDeleteConfirm(f)}
-                              style={{
-                                background: "rgba(239,68,68,0.15)",
-                                border: "1px solid rgba(239,68,68,0.3)",
-                                color: "#fca5a5",
-                                borderRadius: 8,
-                                padding: "6px 12px",
-                                cursor: "pointer",
-                                fontSize: 12,
-                                fontFamily: "'DM Sans',sans-serif",
-                              }}
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            {managerFlavors.length === 0 && (
-              <div
-                style={{
-                  textAlign: "center",
-                  padding: 60,
-                  color: "rgba(255,255,255,0.3)",
-                }}
-              >
-                <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>No
-                flavours found. Add one!
-              </div>
-            )}
-          </>
-        )}
-
+        {/* REPORTS */}
         {activeTab === "reports" && (
           <>
             <div
