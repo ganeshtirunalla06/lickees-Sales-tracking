@@ -44,6 +44,7 @@ const USERS = {
   cashier: { password: "cash123", role: "cashier", name: "Cashier" },
 };
 
+// ─── Sales helpers ─────────────────────────────────────────────────────────────
 const loadSales = async () => {
   const { data } = await supabase
     .from("sales")
@@ -67,6 +68,8 @@ const saveSale = async (entry) => {
 const deleteSaleById = async (id) => {
   await supabase.from("sales").delete().eq("id", id);
 };
+
+// ─── Flavor helpers ────────────────────────────────────────────────────────────
 const loadFlavors = async () => {
   const { data, error } = await supabase
     .from("flavors")
@@ -78,6 +81,108 @@ const loadFlavors = async () => {
   return data;
 };
 
+// ─── Stock helpers (Supabase) ──────────────────────────────────────────────────
+// Reads today's current_stock for all flavors
+const loadStockFromDB = async () => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("stock")
+    .select("*")
+    .eq("date", todayStr);
+  if (error || !data) return {};
+  const s = {};
+  data.forEach((row) => {
+    s[row.flavor_name] = row.current_stock;
+  });
+  return s;
+};
+
+// Updates current_stock for a single flavor (called on every sale / manual adjust)
+const saveStockItem = async (flavorName, currentStock) => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  // Try to update first; if no row exists, insert
+  const { data: existing } = await supabase
+    .from("stock")
+    .select("id")
+    .eq("flavor_name", flavorName)
+    .eq("date", todayStr);
+  if (existing && existing.length > 0) {
+    await supabase
+      .from("stock")
+      .update({
+        current_stock: currentStock,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("flavor_name", flavorName)
+      .eq("date", todayStr);
+  } else {
+    await supabase.from("stock").insert([
+      {
+        flavor_name: flavorName,
+        opening_stock: DEFAULT_STOCK,
+        current_stock: currentStock,
+        date: todayStr,
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+  }
+};
+
+// Ensures every flavor has a stock row for today (does NOT overwrite existing rows)
+const seedMissingStock = async (flavors) => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const { data: existing } = await supabase
+    .from("stock")
+    .select("flavor_name")
+    .eq("date", todayStr);
+  const existingNames = new Set((existing || []).map((r) => r.flavor_name));
+  const missing = flavors.filter((f) => !existingNames.has(f.name));
+  if (missing.length === 0) return;
+  await supabase.from("stock").insert(
+    missing.map((f) => ({
+      flavor_name: f.name,
+      opening_stock: DEFAULT_STOCK,
+      current_stock: DEFAULT_STOCK,
+      date: todayStr,
+      updated_at: new Date().toISOString(),
+    })),
+  );
+};
+
+// Reset all stock to a given value for today
+const resetAllStock = async (flavors, value) => {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  for (const f of flavors) {
+    const { data: existing } = await supabase
+      .from("stock")
+      .select("id")
+      .eq("flavor_name", f.name)
+      .eq("date", todayStr);
+    if (existing && existing.length > 0) {
+      await supabase
+        .from("stock")
+        .update({
+          opening_stock: value,
+          current_stock: value,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("flavor_name", f.name)
+        .eq("date", todayStr);
+    } else {
+      await supabase.from("stock").insert([
+        {
+          flavor_name: f.name,
+          opening_stock: value,
+          current_stock: value,
+          date: todayStr,
+          updated_at: new Date().toISOString(),
+        },
+      ]);
+    }
+  }
+};
+
+// ─── Utilities ─────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().slice(0, 10);
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const fmt = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
@@ -86,40 +191,6 @@ const payColor = (mode) => {
   if (mode === "upi") return { bg: "rgba(34,211,238,0.2)", text: "#22d3ee" };
   if (mode === "card") return { bg: "rgba(139,92,246,0.2)", text: "#a78bfa" };
   return { bg: "rgba(251,146,60,0.2)", text: "#fb923c" };
-};
-
-const loadStock = () => {
-  try {
-    const raw = localStorage.getItem("lickees_stock_v3");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      // Always return saved levels regardless of date
-      if (parsed.levels) return parsed.levels;
-    }
-  } catch (e) {}
-  // Only first time ever — seed with DEFAULT_STOCK
-  const s = {};
-  FALLBACK_FLAVORS.forEach((f) => {
-    s[f.name] = DEFAULT_STOCK;
-  });
-  return s;
-};
-const saveStock = (levels) => {
-  localStorage.setItem(
-    "lickees_stock_v3",
-    JSON.stringify({ date: new Date().toISOString().slice(0, 10), levels }),
-  );
-};
-const mergeStockWithFlavors = (cur, flavors) => {
-  let changed = false;
-  const merged = { ...cur };
-  flavors.forEach((f) => {
-    if (merged[f.name] == null) {
-      merged[f.name] = DEFAULT_STOCK;
-      changed = true;
-    }
-  });
-  return changed ? merged : cur;
 };
 
 const downloadCSV = (sales, label) => {
@@ -140,6 +211,7 @@ const downloadCSV = (sales, label) => {
   a.download = `lickees-${label}.csv`;
   a.click();
 };
+
 const sendWhatsApp = (ana, phone) => {
   const msg = `🍨 *Lickees Daily Summary - ${today()}*\n\n💰 Total: ${fmt(ana.totalRevenue)}\n🧾 Transactions: ${ana.txnCount}\n🍦 Scoops: ${ana.totalScoops}\n📱 UPI: ${fmt(ana.upiRev)}\n💵 Cash: ${fmt(ana.cashRev)}\n💳 Card: ${fmt(ana.cardRev)}\n🏆 Top: ${ana.topFlavors[0]?.[0] || "N/A"}\n\n_Sent from Lickees POS_`;
   window.open(
@@ -200,7 +272,9 @@ export default function App() {
   const [dashTab, setDashTab] = useState("today");
   const [searchQ, setSearchQ] = useState("");
   const [loading, setLoading] = useState(true);
-  const [stock, setStock] = useState(loadStock);
+  // ✅ stock starts empty — always loaded fresh from Supabase
+  const [stock, setStock] = useState({});
+  const [stockLoading, setStockLoading] = useState(true);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [reportMonth, setReportMonth] = useState(thisMonth());
   const [whatsappPhone, setWhatsappPhone] = useState(
@@ -208,7 +282,7 @@ export default function App() {
   );
   const [showPhoneInput, setShowPhoneInput] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [activeTab, setActiveTab] = useState("sales"); // ✅ was missing
+  const [activeTab, setActiveTab] = useState("sales");
   const [calDate, setCalDate] = useState(null);
   const [calMonth, setCalMonth] = useState(() => {
     const n = new Date();
@@ -227,30 +301,49 @@ export default function App() {
 
   useEffect(() => {
     if (screen === "intro" || screen === "pos" || screen === "dashboard") {
+      // Load sales
       loadSales().then((data) => {
         setSales(data);
         setLoading(false);
       });
-      loadFlavors().then((data) => {
+
+      // Load flavors → seed missing stock rows → load stock
+      loadFlavors().then(async (data) => {
         setFlavors(data);
         setFlavorsLoading(false);
-        setStock((cur) => mergeStockWithFlavors(cur, data));
+        await seedMissingStock(data);
+        const stockData = await loadStockFromDB();
+        setStock(stockData);
+        setStockLoading(false);
       });
 
-      // Real-time: listen for new/updated/deleted sales
+      // ✅ Real-time: sales
       const salesChannel = supabase
         .channel("sales-changes")
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "sales" },
           async () => {
-            const refreshed = await loadSales();
-            setSales(refreshed);
+            const r = await loadSales();
+            setSales(r);
           },
         )
         .subscribe();
 
-      // Real-time: listen for flavor changes
+      // ✅ Real-time: stock — syncs across ALL devices instantly
+      const stockChannel = supabase
+        .channel("stock-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "stock" },
+          async () => {
+            const s = await loadStockFromDB();
+            setStock(s);
+          },
+        )
+        .subscribe();
+
+      // ✅ Real-time: flavors
       const flavorsChannel = supabase
         .channel("flavors-changes")
         .on(
@@ -259,22 +352,20 @@ export default function App() {
           async () => {
             const data = await loadFlavors();
             setFlavors(data);
-            setStock((cur) => mergeStockWithFlavors(cur, data));
+            await seedMissingStock(data);
+            const s = await loadStockFromDB();
+            setStock(s);
           },
         )
         .subscribe();
 
-      // Cleanup on screen change
       return () => {
         supabase.removeChannel(salesChannel);
+        supabase.removeChannel(stockChannel);
         supabase.removeChannel(flavorsChannel);
       };
     }
   }, [screen]);
-
-  useEffect(() => {
-    saveStock(stock);
-  }, [stock]);
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -294,11 +385,13 @@ export default function App() {
       setLoginError("Invalid credentials. Try again.");
     }
   };
+
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem("lickees_user");
     setScreen("login");
   };
+
   const isAdmin = currentUser?.role === "admin";
 
   const addToCart = (flavor) => {
@@ -314,6 +407,7 @@ export default function App() {
     });
     showToast(`${flavor.emoji} ${flavor.name} added!`);
   };
+
   const removeFromCart = (name) =>
     setCart((c) => c.filter((i) => i.name !== name));
   const updateQty = (name, delta) =>
@@ -324,6 +418,7 @@ export default function App() {
     );
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
+  // ✅ Checkout: save sale + reduce current_stock in Supabase
   const checkout = async () => {
     if (!cart.length) return showToast("Cart is empty!", "error");
     const now = new Date();
@@ -337,14 +432,18 @@ export default function App() {
     };
     const error = await saveSale(entry);
     if (error) return showToast("❌ Failed to save sale!", "error");
+
+    // Reduce stock in Supabase for each sold item
     const newStock = { ...stock };
-    cart.forEach((i) => {
+    for (const i of cart) {
       newStock[i.name] = Math.max(
         0,
         (newStock[i.name] ?? DEFAULT_STOCK) - i.qty,
       );
-    });
+      await saveStockItem(i.name, newStock[i.name]);
+    }
     setStock(newStock);
+
     const lowItems = cart.filter(
       (i) => newStock[i.name] < 10 && newStock[i.name] > 0,
     );
@@ -355,6 +454,7 @@ export default function App() {
       );
     else
       showToast(`✅ Sale of ${fmt(cartTotal)} via ${payMode.toUpperCase()}!`);
+
     const refreshed = await loadSales();
     setSales(refreshed);
     setCart([]);
@@ -451,7 +551,6 @@ export default function App() {
     return { firstDay, daysInMonth, salesByDate, year: y, month: m };
   };
 
-  // ✅ Sort by price low → high
   const displayFlavors = flavors
     .filter(
       (f) =>
@@ -898,7 +997,7 @@ export default function App() {
           }}
         >
           <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-            {flavorsLoading ? (
+            {flavorsLoading || stockLoading ? (
               <div style={{ textAlign: "center", padding: 60, color: "#ccc" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>
                 <div>Loading flavours...</div>
@@ -1634,7 +1733,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Tab Bar — 4 tabs only, no Flavours */}
+      {/* Tab Bar */}
       <div
         style={{
           padding: "10px 20px",
@@ -1661,7 +1760,7 @@ export default function App() {
       </div>
 
       <div style={{ padding: "16px 20px", maxWidth: 1200, margin: "0 auto" }}>
-        {/* SALES */}
+        {/* ── SALES ── */}
         {activeTab === "sales" && (
           <>
             <div
@@ -2088,7 +2187,7 @@ export default function App() {
           </>
         )}
 
-        {/* CALENDAR */}
+        {/* ── CALENDAR ── */}
         {activeTab === "calendar" && (
           <>
             <div
@@ -2566,7 +2665,7 @@ export default function App() {
           </>
         )}
 
-        {/* STOCK */}
+        {/* ── STOCK ── */}
         {activeTab === "stock" && (
           <>
             <div
@@ -2637,16 +2736,16 @@ export default function App() {
             <div
               style={{
                 padding: "12px 16px",
-                background: "rgba(139,92,246,0.12)",
-                border: "1px solid rgba(139,92,246,0.25)",
+                background: "rgba(52,211,153,0.1)",
+                border: "1px solid rgba(52,211,153,0.25)",
                 borderRadius: 12,
                 marginBottom: 16,
                 fontSize: 13,
-                color: "#a78bfa",
+                color: "#34d399",
               }}
             >
-              📦 Stock resets to {DEFAULT_STOCK} every new day. Adjust
-              quantities below as needed.
+              ☁️ Stock synced across all devices via Supabase. Sell on laptop →
+              mobile updates instantly.
             </div>
             <div className="sc">
               <div
@@ -2663,12 +2762,12 @@ export default function App() {
                   📦 Stock Levels
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
+                  {/* ✅ Reset All — sets opening_stock + current_stock to DEFAULT_STOCK in Supabase */}
                   <button
-                    onClick={() => {
-                      const s = {};
-                      flavors.forEach((f) => {
-                        s[f.name] = DEFAULT_STOCK;
-                      });
+                    onClick={async () => {
+                      showToast("⏳ Resetting stock...");
+                      await resetAllStock(flavors, DEFAULT_STOCK);
+                      const s = await loadStockFromDB();
                       setStock(s);
                       showToast(`✅ All stock reset to ${DEFAULT_STOCK}!`);
                     }}
@@ -2677,16 +2776,19 @@ export default function App() {
                   >
                     🔄 Reset All
                   </button>
+                  {/* ✅ +10 All — adds 10 to every flavor's current_stock */}
                   <button
-                    onClick={() => {
-                      const s = { ...stock };
-                      flavors.forEach((f) => {
-                        s[f.name] = Math.min(
-                          (s[f.name] ?? DEFAULT_STOCK) + 10,
+                    onClick={async () => {
+                      showToast("⏳ Updating stock...");
+                      const newStock = { ...stock };
+                      for (const f of flavors) {
+                        newStock[f.name] = Math.min(
+                          (newStock[f.name] ?? DEFAULT_STOCK) + 10,
                           200,
                         );
-                      });
-                      setStock(s);
+                        await saveStockItem(f.name, newStock[f.name]);
+                      }
+                      setStock(newStock);
                       showToast("✅ Added 10 to all!");
                     }}
                     className="bp"
@@ -2745,16 +2847,16 @@ export default function App() {
                             gap: 4,
                           }}
                         >
+                          {/* ✅ − button saves to Supabase */}
                           <button
-                            onClick={() =>
-                              setStock((s) => ({
-                                ...s,
-                                [f.name]: Math.max(
-                                  0,
-                                  (s[f.name] ?? DEFAULT_STOCK) - 1,
-                                ),
-                              }))
-                            }
+                            onClick={async () => {
+                              const newQty = Math.max(
+                                0,
+                                (stock[f.name] ?? DEFAULT_STOCK) - 1,
+                              );
+                              setStock((s) => ({ ...s, [f.name]: newQty }));
+                              await saveStockItem(f.name, newQty);
+                            }}
                             style={{
                               width: 24,
                               height: 24,
@@ -2771,19 +2873,19 @@ export default function App() {
                           >
                             −
                           </button>
+                          {/* ✅ Input saves to Supabase on change */}
                           <input
                             type="number"
                             min="0"
                             value={qty}
-                            onChange={(e) =>
-                              setStock((s) => ({
-                                ...s,
-                                [f.name]: Math.max(
-                                  0,
-                                  parseInt(e.target.value) || 0,
-                                ),
-                              }))
-                            }
+                            onChange={async (e) => {
+                              const newQty = Math.max(
+                                0,
+                                parseInt(e.target.value) || 0,
+                              );
+                              setStock((s) => ({ ...s, [f.name]: newQty }));
+                              await saveStockItem(f.name, newQty);
+                            }}
                             style={{
                               width: 48,
                               textAlign: "center",
@@ -2795,13 +2897,14 @@ export default function App() {
                               fontSize: 13,
                             }}
                           />
+                          {/* ✅ + button saves to Supabase */}
                           <button
-                            onClick={() =>
-                              setStock((s) => ({
-                                ...s,
-                                [f.name]: (s[f.name] ?? DEFAULT_STOCK) + 1,
-                              }))
-                            }
+                            onClick={async () => {
+                              const newQty =
+                                (stock[f.name] ?? DEFAULT_STOCK) + 1;
+                              setStock((s) => ({ ...s, [f.name]: newQty }));
+                              await saveStockItem(f.name, newQty);
+                            }}
                             style={{
                               width: 24,
                               height: 24,
@@ -2847,7 +2950,7 @@ export default function App() {
           </>
         )}
 
-        {/* REPORTS */}
+        {/* ── REPORTS ── */}
         {activeTab === "reports" && (
           <>
             <div
