@@ -52,18 +52,16 @@ const loadSales = async () => {
   return data || [];
 };
 const saveSale = async (entry) => {
-  const { error } = await supabase
-    .from("sales")
-    .insert([
-      {
-        date: entry.date,
-        month: entry.month,
-        time: entry.time,
-        items: entry.items,
-        total: entry.total,
-        pay_mode: entry.payMode,
-      },
-    ]);
+  const { error } = await supabase.from("sales").insert([
+    {
+      date: entry.date,
+      month: entry.month,
+      time: entry.time,
+      items: entry.items,
+      total: entry.total,
+      pay_mode: entry.payMode,
+    },
+  ]);
   return error;
 };
 const deleteSaleById = async (id) => {
@@ -95,10 +93,11 @@ const loadStock = () => {
     const raw = localStorage.getItem("lickees_stock_v3");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.date === new Date().toISOString().slice(0, 10))
-        return parsed.levels;
+      // Always return saved levels regardless of date
+      if (parsed.levels) return parsed.levels;
     }
   } catch (e) {}
+  // Only first time ever — seed with DEFAULT_STOCK
   const s = {};
   FALLBACK_FLAVORS.forEach((f) => {
     s[f.name] = DEFAULT_STOCK;
@@ -237,6 +236,39 @@ export default function App() {
         setFlavorsLoading(false);
         setStock((cur) => mergeStockWithFlavors(cur, data));
       });
+
+      // Real-time: listen for new/updated/deleted sales
+      const salesChannel = supabase
+        .channel("sales-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "sales" },
+          async () => {
+            const refreshed = await loadSales();
+            setSales(refreshed);
+          },
+        )
+        .subscribe();
+
+      // Real-time: listen for flavor changes
+      const flavorsChannel = supabase
+        .channel("flavors-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "flavors" },
+          async () => {
+            const data = await loadFlavors();
+            setFlavors(data);
+            setStock((cur) => mergeStockWithFlavors(cur, data));
+          },
+        )
+        .subscribe();
+
+      // Cleanup on screen change
+      return () => {
+        supabase.removeChannel(salesChannel);
+        supabase.removeChannel(flavorsChannel);
+      };
     }
   }, [screen]);
 
@@ -995,14 +1027,21 @@ export default function App() {
                     <div
                       style={{
                         fontSize: 12,
-                        fontWeight: "600",
+                        fontWeight: "700",
                         color: "#1f2937",
                       }}
                     >
                       {item.name}
                     </div>
-                    <div style={{ fontSize: 11, color: "#ec4899" }}>
-                      {fmt(item.price)}×{item.qty}={fmt(item.price * item.qty)}
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#ec4899",
+                        fontWeight: "700",
+                      }}
+                    >
+                      {fmt(item.price)} × {item.qty} ={" "}
+                      {fmt(item.price * item.qty)}
                     </div>
                   </div>
                   <div
