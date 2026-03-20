@@ -64,6 +64,14 @@ const saveSale = async (entry) => {
 const deleteSaleById = async (id) => {
   await supabase.from("sales").delete().eq("id", id);
 };
+// ✅ NEW: Update pay_mode for a sale
+const updateSalePayMode = async (id, newPayMode) => {
+  const { error } = await supabase
+    .from("sales")
+    .update({ pay_mode: newPayMode })
+    .eq("id", id);
+  return error;
+};
 // ─── Flavors ──────────────────────────────────────────────────────────────────
 const loadFlavors = async () => {
   const { data, error } = await supabase
@@ -75,19 +83,18 @@ const loadFlavors = async () => {
   if (error || !data || data.length === 0) return FALLBACK_FLAVORS;
   return data;
 };
-// ─── Stock (simple: one row per flavor, no date, carries forward forever) ─────
+// ─── Stock ────────────────────────────────────────────────────────────────────
 const loadStockFromDB = async () => {
   const { data, error } = await supabase
     .from("stock")
     .select("flavor_name, current_stock");
-  if (error || !data) return null; // null = failed to load
+  if (error || !data) return null;
   const s = {};
   data.forEach((row) => {
     s[row.flavor_name] = row.current_stock;
   });
   return s;
 };
-// Insert rows only for flavors that don't have a stock row yet
 const seedMissingStock = async (flavors) => {
   const { data: existing } = await supabase.from("stock").select("flavor_name");
   const existingNames = new Set((existing || []).map((r) => r.flavor_name));
@@ -101,7 +108,6 @@ const seedMissingStock = async (flavors) => {
     })),
   );
 };
-// Update a single flavor's stock — always UPDATE (row always exists after seed)
 const saveStockItem = async (flavorName, qty) => {
   await supabase
     .from("stock")
@@ -194,9 +200,11 @@ export default function App() {
   const [dashTab, setDashTab] = useState("today");
   const [searchQ, setSearchQ] = useState("");
   const [loading, setLoading] = useState(true);
-  const [stock, setStock] = useState(null); // null = not loaded yet
+  const [stock, setStock] = useState(null);
   const [stockLoading, setStockLoading] = useState(true);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  // ✅ NEW: edit pay mode modal state
+  const [editPayModal, setEditPayModal] = useState(null); // { id, pay_mode }
   const [reportMonth, setReportMonth] = useState(thisMonth());
   const [whatsappPhone, setWhatsappPhone] = useState(
     () => localStorage.getItem("lickees_phone") || "",
@@ -227,14 +235,11 @@ export default function App() {
       loadFlavors().then(async (data) => {
         setFlavors(data);
         setFlavorsLoading(false);
-        // Seed only missing flavors — never overwrites existing stock
         await seedMissingStock(data);
-        // Load actual stock values from DB
         const s = await loadStockFromDB();
         setStock(s || {});
         setStockLoading(false);
       });
-      // Real-time: sales
       const salesChannel = supabase
         .channel("rt-sales")
         .on(
@@ -245,7 +250,6 @@ export default function App() {
           },
         )
         .subscribe();
-      // Real-time: flavors
       const flavorsChannel = supabase
         .channel("rt-flavors")
         .on(
@@ -299,9 +303,8 @@ export default function App() {
     setScreen("login");
   };
   const isAdmin = currentUser?.role === "admin";
-  // Safe stock getter — never shows 40 as default while loading
   const getStock = (name) => {
-    if (stock === null) return null; // still loading
+    if (stock === null) return null;
     return stock[name] ?? DEFAULT_STOCK;
   };
   const addToCart = (flavor) => {
@@ -328,9 +331,10 @@ export default function App() {
       ),
     );
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+
+  // ✅ FIXED checkout: correct stock deduction + low stock check after deduction
   const checkout = async () => {
     if (!cart.length) return showToast("Cart is empty!", "error");
-
     const now = new Date();
     const entry = {
       date: now.toISOString().slice(0, 10),
@@ -340,11 +344,10 @@ export default function App() {
       total: cartTotal,
       payMode,
     };
-
     const error = await saveSale(entry);
     if (error) return showToast("❌ Failed to save sale!", "error");
 
-    // Update stock and track new quantities
+    // Build new stock snapshot and save to DB
     const newStockSnapshot = { ...stock };
     for (const i of cart) {
       const currentQty = newStockSnapshot[i.name] ?? DEFAULT_STOCK;
@@ -372,12 +375,28 @@ export default function App() {
     setSales(await loadSales());
     setCart([]);
   };
+
   const deleteSale = async (id) => {
     await deleteSaleById(id);
     setSales((s) => s.filter((x) => x.id !== id));
     setDeleteConfirm(null);
     showToast("🗑️ Sale deleted!");
   };
+
+  // ✅ NEW: handle payment mode edit
+  const handleEditPayMode = async (newMode) => {
+    if (!editPayModal) return;
+    const error = await updateSalePayMode(editPayModal.id, newMode);
+    if (error) return showToast("❌ Failed to update payment!", "error");
+    setSales((s) =>
+      s.map((x) =>
+        x.id === editPayModal.id ? { ...x, pay_mode: newMode } : x,
+      ),
+    );
+    showToast(`✅ Payment changed to ${newMode.toUpperCase()}!`);
+    setEditPayModal(null);
+  };
+
   const analyticsFor = (filterFn) => {
     const filtered = sales.filter(filterFn);
     const totalRevenue = filtered.reduce((s, x) => s + (x.total || 0), 0);
@@ -471,7 +490,6 @@ export default function App() {
         f.name.toLowerCase().includes(searchQ.toLowerCase()),
     )
     .sort((a, b) => a.price - b.price);
-  // Use actual DB stock values — never fall back to DEFAULT_STOCK for alert calculations
   const stockLoaded = stock !== null;
   const lowStockItems = stockLoaded
     ? flavors.filter((f) => {
@@ -512,6 +530,113 @@ export default function App() {
         {toast.msg}
       </div>
     ) : null;
+
+  // ✅ NEW: Edit Pay Mode Modal component
+  const EditPayModal = () =>
+    editPayModal ? (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.7)",
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+        }}
+      >
+        <div
+          style={{
+            background: "#1e1b4b",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 20,
+            padding: 28,
+            maxWidth: 300,
+            width: "100%",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 36, marginBottom: 12 }}>💳</div>
+          <div style={{ fontSize: 16, fontWeight: "700", marginBottom: 6 }}>
+            Change Payment Mode
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: "rgba(255,255,255,0.5)",
+              marginBottom: 20,
+            }}
+          >
+            Currently:{" "}
+            <span style={{ color: "#fbbf24", fontWeight: "700" }}>
+              {editPayModal.pay_mode?.toUpperCase()}
+            </span>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 8,
+              marginBottom: 16,
+            }}
+          >
+            {[
+              ["cash", "💵", "Cash"],
+              ["upi", "📱", "UPI"],
+              ["card", "💳", "Card"],
+            ].map(([mode, icon, label]) => (
+              <button
+                key={mode}
+                onClick={() => handleEditPayMode(mode)}
+                style={{
+                  padding: "12px 4px",
+                  borderRadius: 12,
+                  border: `2px solid ${
+                    editPayModal.pay_mode === mode
+                      ? "#ec4899"
+                      : "rgba(255,255,255,0.15)"
+                  }`,
+                  background:
+                    editPayModal.pay_mode === mode
+                      ? "rgba(236,72,153,0.2)"
+                      : "rgba(255,255,255,0.05)",
+                  color:
+                    editPayModal.pay_mode === mode
+                      ? "#ec4899"
+                      : "rgba(255,255,255,0.7)",
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans',sans-serif",
+                  fontSize: 12,
+                  fontWeight: "600",
+                  transition: "all 0.2s",
+                }}
+              >
+                <div style={{ fontSize: 20, marginBottom: 4 }}>{icon}</div>
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setEditPayModal(null)}
+            style={{
+              width: "100%",
+              padding: "10px",
+              background: "rgba(255,255,255,0.08)",
+              border: "none",
+              color: "rgba(255,255,255,0.6)",
+              borderRadius: 10,
+              cursor: "pointer",
+              fontFamily: "'DM Sans',sans-serif",
+              fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : null;
+
   // ─── LOGIN ─────────────────────────────────────────────────────────────────
   if (screen === "login")
     return (
@@ -921,7 +1046,6 @@ export default function App() {
           }}
         >
           <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-            {/* Show spinner until BOTH flavors AND stock are loaded from DB */}
             {flavorsLoading || stockLoading ? (
               <div style={{ textAlign: "center", padding: 60, color: "#ccc" }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🍦</div>
@@ -1230,6 +1354,8 @@ export default function App() {
     >
       <style>{G}</style>
       <Toast />
+      {/* ✅ NEW: Edit Pay Mode Modal */}
+      <EditPayModal />
       {showNotifications && (
         <div
           onClick={() => setShowNotifications(false)}
@@ -2053,7 +2179,7 @@ export default function App() {
                       </div>
                     </div>
                     <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
                     >
                       <div style={{ textAlign: "right" }}>
                         <div
@@ -2078,6 +2204,27 @@ export default function App() {
                           {sale.pay_mode?.toUpperCase()}
                         </div>
                       </div>
+                      {/* ✅ NEW: Edit payment button */}
+                      <button
+                        onClick={() =>
+                          setEditPayModal({
+                            id: sale.id,
+                            pay_mode: sale.pay_mode,
+                          })
+                        }
+                        style={{
+                          background: "rgba(251,191,36,0.15)",
+                          border: "1px solid rgba(251,191,36,0.3)",
+                          color: "#fbbf24",
+                          borderRadius: 8,
+                          padding: "4px 10px",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontFamily: "'DM Sans',sans-serif",
+                        }}
+                      >
+                        ✏️
+                      </button>
                       <button
                         onClick={() => setDeleteConfirm(sale.id)}
                         style={{
@@ -3046,7 +3193,7 @@ export default function App() {
                       </div>
                     </div>
                     <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
                     >
                       <div style={{ textAlign: "right" }}>
                         <div
@@ -3071,6 +3218,27 @@ export default function App() {
                           {sale.pay_mode?.toUpperCase()}
                         </div>
                       </div>
+                      {/* ✅ NEW: Edit payment button in Reports tab too */}
+                      <button
+                        onClick={() =>
+                          setEditPayModal({
+                            id: sale.id,
+                            pay_mode: sale.pay_mode,
+                          })
+                        }
+                        style={{
+                          background: "rgba(251,191,36,0.15)",
+                          border: "1px solid rgba(251,191,36,0.3)",
+                          color: "#fbbf24",
+                          borderRadius: 8,
+                          padding: "4px 10px",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontFamily: "'DM Sans',sans-serif",
+                        }}
+                      >
+                        ✏️
+                      </button>
                       <button
                         onClick={() => setDeleteConfirm(sale.id)}
                         style={{
