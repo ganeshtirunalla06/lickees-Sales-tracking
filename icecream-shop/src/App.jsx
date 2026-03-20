@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { supabase } from "./supabase";
-
 const FALLBACK_FLAVORS = [
   { name: "Tender Coconut", price: 30, emoji: "🥥", category: "Fruit" },
   { name: "Blue Berry", price: 30, emoji: "🫐", category: "Fruit" },
@@ -35,15 +34,12 @@ const FALLBACK_FLAVORS = [
   { name: "Paan", price: 20, emoji: "🌿", category: "Classic" },
   { name: "Bubble Gum", price: 20, emoji: "🫧", category: "Classic" },
 ];
-
 const CATEGORIES = ["All", "Fruit", "Classic", "Premium", "Special"];
 const DEFAULT_STOCK = 40;
-
 const USERS = {
   admin: { password: "admin123", role: "admin", name: "Admin" },
   cashier: { password: "cash123", role: "cashier", name: "Cashier" },
 };
-
 // ─── Sales ────────────────────────────────────────────────────────────────────
 const loadSales = async () => {
   const { data } = await supabase
@@ -68,7 +64,6 @@ const saveSale = async (entry) => {
 const deleteSaleById = async (id) => {
   await supabase.from("sales").delete().eq("id", id);
 };
-
 // ─── Flavors ──────────────────────────────────────────────────────────────────
 const loadFlavors = async () => {
   const { data, error } = await supabase
@@ -80,7 +75,6 @@ const loadFlavors = async () => {
   if (error || !data || data.length === 0) return FALLBACK_FLAVORS;
   return data;
 };
-
 // ─── Stock (simple: one row per flavor, no date, carries forward forever) ─────
 const loadStockFromDB = async () => {
   const { data, error } = await supabase
@@ -93,7 +87,6 @@ const loadStockFromDB = async () => {
   });
   return s;
 };
-
 // Insert rows only for flavors that don't have a stock row yet
 const seedMissingStock = async (flavors) => {
   const { data: existing } = await supabase.from("stock").select("flavor_name");
@@ -108,7 +101,6 @@ const seedMissingStock = async (flavors) => {
     })),
   );
 };
-
 // Update a single flavor's stock — always UPDATE (row always exists after seed)
 const saveStockItem = async (flavorName, qty) => {
   await supabase
@@ -116,7 +108,6 @@ const saveStockItem = async (flavorName, qty) => {
     .update({ current_stock: qty, updated_at: new Date().toISOString() })
     .eq("flavor_name", flavorName);
 };
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().slice(0, 10);
 const thisMonth = () => new Date().toISOString().slice(0, 7);
@@ -152,7 +143,6 @@ const sendWhatsApp = (ana, phone) => {
     "_blank",
   );
 };
-
 const G = `
   @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}body{font-family:'DM Sans',sans-serif}
@@ -188,7 +178,6 @@ const G = `
   input,select{font-family:'DM Sans',sans-serif}
   ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
 `;
-
 export default function App() {
   const [screen, setScreen] = useState("login");
   const [currentUser, setCurrentUser] = useState(null);
@@ -220,7 +209,6 @@ export default function App() {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
   });
-
   useEffect(() => {
     const saved = localStorage.getItem("lickees_user");
     if (saved) {
@@ -230,14 +218,12 @@ export default function App() {
       } catch (e) {}
     }
   }, []);
-
   useEffect(() => {
     if (screen === "intro" || screen === "pos" || screen === "dashboard") {
       loadSales().then((data) => {
         setSales(data);
         setLoading(false);
       });
-
       loadFlavors().then(async (data) => {
         setFlavors(data);
         setFlavorsLoading(false);
@@ -248,7 +234,6 @@ export default function App() {
         setStock(s || {});
         setStockLoading(false);
       });
-
       // Real-time: sales
       const salesChannel = supabase
         .channel("rt-sales")
@@ -260,21 +245,6 @@ export default function App() {
           },
         )
         .subscribe();
-
-      // Real-time: stock — THIS is what keeps laptop & mobile in sync
-      // Only fires when someone explicitly updates stock, NOT on refresh
-      const stockChannel = supabase
-        .channel("rt-stock")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "stock" },
-          async () => {
-            const s = await loadStockFromDB();
-            if (s) setStock(s);
-          },
-        )
-        .subscribe();
-
       // Real-time: flavors
       const flavorsChannel = supabase
         .channel("rt-flavors")
@@ -290,15 +260,22 @@ export default function App() {
           },
         )
         .subscribe();
-
       return () => {
         supabase.removeChannel(salesChannel);
-        supabase.removeChannel(stockChannel);
         supabase.removeChannel(flavorsChannel);
       };
     }
   }, [screen]);
-
+  const refreshStock = async () => {
+    showToast("⏳ Refreshing stock...");
+    const s = await loadStockFromDB();
+    if (s) {
+      setStock(s);
+      showToast("✅ Stock refreshed!");
+    } else {
+      showToast("❌ Failed to refresh stock", "error");
+    }
+  };
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
@@ -322,13 +299,11 @@ export default function App() {
     setScreen("login");
   };
   const isAdmin = currentUser?.role === "admin";
-
   // Safe stock getter — never shows 40 as default while loading
   const getStock = (name) => {
     if (stock === null) return null; // still loading
     return stock[name] ?? DEFAULT_STOCK;
   };
-
   const addToCart = (flavor) => {
     const qty = getStock(flavor.name);
     if (qty === null) return showToast("⏳ Stock still loading...", "error");
@@ -353,9 +328,9 @@ export default function App() {
       ),
     );
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-
   const checkout = async () => {
     if (!cart.length) return showToast("Cart is empty!", "error");
+
     const now = new Date();
     const entry = {
       date: now.toISOString().slice(0, 10),
@@ -365,23 +340,27 @@ export default function App() {
       total: cartTotal,
       payMode,
     };
+
     const error = await saveSale(entry);
     if (error) return showToast("❌ Failed to save sale!", "error");
 
-    // Reduce stock in Supabase — real-time will propagate to all devices
-    const newStock = { ...(stock || {}) };
+    // Update stock and track new quantities
+    const newStockSnapshot = { ...stock };
     for (const i of cart) {
-      newStock[i.name] = Math.max(
-        0,
-        (newStock[i.name] ?? DEFAULT_STOCK) - i.qty,
-      );
-      await saveStockItem(i.name, newStock[i.name]);
+      const currentQty = newStockSnapshot[i.name] ?? DEFAULT_STOCK;
+      const newQty = Math.max(0, currentQty - i.qty);
+      newStockSnapshot[i.name] = newQty;
+      await saveStockItem(i.name, newQty);
     }
-    setStock(newStock);
 
+    // Update local state once with final values
+    setStock(newStockSnapshot);
+
+    // ✅ Check low stock AFTER deduction using new values
     const lowItems = cart.filter(
-      (i) => newStock[i.name] < 10 && newStock[i.name] > 0,
+      (i) => newStockSnapshot[i.name] < 10 && newStockSnapshot[i.name] > 0,
     );
+
     if (lowItems.length)
       showToast(
         `⚠️ Low stock: ${lowItems.map((i) => i.name).join(", ")}`,
@@ -389,17 +368,16 @@ export default function App() {
       );
     else
       showToast(`✅ Sale of ${fmt(cartTotal)} via ${payMode.toUpperCase()}!`);
+
     setSales(await loadSales());
     setCart([]);
   };
-
   const deleteSale = async (id) => {
     await deleteSaleById(id);
     setSales((s) => s.filter((x) => x.id !== id));
     setDeleteConfirm(null);
     showToast("🗑️ Sale deleted!");
   };
-
   const analyticsFor = (filterFn) => {
     const filtered = sales.filter(filterFn);
     const totalRevenue = filtered.reduce((s, x) => s + (x.total || 0), 0);
@@ -448,7 +426,6 @@ export default function App() {
       cardCount,
     };
   };
-
   const ana = analyticsFor(
     dashTab === "today"
       ? (s) => s.date === today()
@@ -456,7 +433,6 @@ export default function App() {
   );
   const reportAna = analyticsFor((s) => s.month === reportMonth);
   const calAna = calDate ? analyticsFor((s) => s.date === calDate) : null;
-
   const last7Days = () => {
     const days = [];
     for (let i = 6; i >= 0; i--) {
@@ -473,7 +449,6 @@ export default function App() {
     }
     return days;
   };
-
   const getCalendarDays = (ym) => {
     const [y, m] = ym.split("-").map(Number);
     const salesByDate = {};
@@ -489,7 +464,6 @@ export default function App() {
       month: m,
     };
   };
-
   const displayFlavors = flavors
     .filter(
       (f) =>
@@ -497,7 +471,6 @@ export default function App() {
         f.name.toLowerCase().includes(searchQ.toLowerCase()),
     )
     .sort((a, b) => a.price - b.price);
-
   // Use actual DB stock values — never fall back to DEFAULT_STOCK for alert calculations
   const stockLoaded = stock !== null;
   const lowStockItems = stockLoaded
@@ -513,11 +486,9 @@ export default function App() {
     ...outOfStockItems.map((f) => ({ ...f, alertType: "out" })),
     ...lowStockItems.map((f) => ({ ...f, alertType: "low" })),
   ];
-
   const mobile = isMobile();
   const seven = last7Days();
   const maxRev = Math.max(...seven.map((d) => d.rev), 1);
-
   const Toast = () =>
     toast ? (
       <div
@@ -541,7 +512,6 @@ export default function App() {
         {toast.msg}
       </div>
     ) : null;
-
   // ─── LOGIN ─────────────────────────────────────────────────────────────────
   if (screen === "login")
     return (
@@ -689,7 +659,6 @@ export default function App() {
         </div>
       </div>
     );
-
   // ─── INTRO ─────────────────────────────────────────────────────────────────
   if (screen === "intro")
     return (
@@ -821,7 +790,6 @@ export default function App() {
         </div>
       </div>
     );
-
   // ─── POS ───────────────────────────────────────────────────────────────────
   if (screen === "pos")
     return (
@@ -892,6 +860,19 @@ export default function App() {
                 📊 Dashboard
               </button>
             )}
+            <button
+              className="bo"
+              style={{
+                padding: "8px 14px",
+                fontSize: 12,
+                color: "#831843",
+                border: "1px solid #fce7f3",
+                background: "#fdf2f8",
+              }}
+              onClick={refreshStock}
+            >
+              🔄 Refresh Stock
+            </button>
           </div>
         </div>
         <div
@@ -1237,7 +1218,6 @@ export default function App() {
         </div>
       </div>
     );
-
   // ─── DASHBOARD ─────────────────────────────────────────────────────────────
   return (
     <div
@@ -1256,7 +1236,6 @@ export default function App() {
           style={{ position: "fixed", inset: 0, zIndex: 9998 }}
         />
       )}
-
       {deleteConfirm && (
         <div
           style={{
@@ -1330,7 +1309,6 @@ export default function App() {
           </div>
         </div>
       )}
-
       {showPhoneInput && (
         <div
           style={{
@@ -1413,7 +1391,6 @@ export default function App() {
           </div>
         </div>
       )}
-
       {/* Header */}
       <div
         style={{
@@ -1673,7 +1650,6 @@ export default function App() {
           </button>
         </div>
       </div>
-
       <div
         style={{
           padding: "10px 20px",
@@ -1698,7 +1674,6 @@ export default function App() {
           </button>
         ))}
       </div>
-
       <div style={{ padding: "16px 20px", maxWidth: 1200, margin: "0 auto" }}>
         {activeTab === "sales" && (
           <>
@@ -2125,7 +2100,6 @@ export default function App() {
             </div>
           </>
         )}
-
         {activeTab === "calendar" && (
           <>
             <div
@@ -2602,7 +2576,6 @@ export default function App() {
             )}
           </>
         )}
-
         {activeTab === "stock" && (
           <>
             <div
@@ -2699,6 +2672,13 @@ export default function App() {
                   📦 Stock Levels
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={refreshStock}
+                    className="bo"
+                    style={{ fontSize: 12 }}
+                  >
+                    🔄 Refresh
+                  </button>
                   <button
                     onClick={async () => {
                       showToast("⏳ Resetting...");
@@ -2883,7 +2863,6 @@ export default function App() {
             </div>
           </>
         )}
-
         {activeTab === "reports" && (
           <>
             <div
