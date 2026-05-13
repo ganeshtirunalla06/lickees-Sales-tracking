@@ -33,8 +33,15 @@ const FALLBACK_FLAVORS = [
   { name: "Butter Scotch", price: 25, emoji: "🟡", category: "Classic" },
   { name: "Paan", price: 20, emoji: "🌿", category: "Classic" },
   { name: "Bubble Gum", price: 20, emoji: "🫧", category: "Classic" },
+  // Family Pack 300ml
+  { name: "Vanilla 300ml", price: 149, emoji: "🍦", category: "Family Pack" },
+  { name: "Chocolate 300ml", price: 189, emoji: "🍫", category: "Family Pack" },
+  { name: "Mango 300ml", price: 189, emoji: "🥭", category: "Family Pack" },
+  { name: "Strawberry 300ml", price: 189, emoji: "🍓", category: "Family Pack" },
+  { name: "Tender Coconut 300ml", price: 199, emoji: "🥥", category: "Family Pack" },
+  { name: "Seethaphal 300ml", price: 199, emoji: "💚", category: "Family Pack" },
 ];
-const CATEGORIES = ["All", "Fruit", "Classic", "Premium", "Special"];
+const CATEGORIES = ["All", "Fruit", "Classic", "Premium", "Special", "Family Pack"];
 const DEFAULT_STOCK = 40;
 const USERS = {
   admin: { password: "admin123", role: "admin", name: "Admin" },
